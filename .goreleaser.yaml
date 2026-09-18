@@ -1,0 +1,60 @@
+version: 2
+
+project_name: harness
+
+builds:
+  - id: harness
+    main: ./cmd/harness
+    binary: harness
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+archives:
+  - id: default
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - AGENTS.md
+      - LICENSE*
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - repository:
+      owner: Koality-Assured
+      name: homebrew-tap
+    homepage: "https://github.com/Koality-Assured/harness-cli"
+    description: "Unified Harness CLI Control Plane for domain harnesses and spokes"
+    license: "MIT"
+    folder: Formula
+
+scoop:
+  repository:
+    owner: Koality-Assured
+    name: scoop-bucket
+  homepage: "https://github.com/Koality-Assured/harness-cli"
+  description: "Unified Harness CLI Control Plane for domain harnesses and spokes"
+  license: "MIT"

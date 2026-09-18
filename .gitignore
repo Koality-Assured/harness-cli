@@ -1,0 +1,27 @@
+# Binaries and executables
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+harness
+
+# Test artifacts and coverage
+*.out
+*.test
+coverage.txt
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Editor and IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Worktrees and local scratch
+scratch/

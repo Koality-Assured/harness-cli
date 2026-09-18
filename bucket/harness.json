@@ -1,0 +1,28 @@
+{
+  "version": "0.1.0",
+  "description": "Unified Harness CLI Control Plane for domain harnesses and spokes",
+  "homepage": "https://github.com/Koality-Assured/harness-cli",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/Koality-Assured/harness-cli/releases/download/v0.1.0/harness_0.1.0_windows_amd64.zip",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "arm64": {
+      "url": "https://github.com/Koality-Assured/harness-cli/releases/download/v0.1.0/harness_0.1.0_windows_arm64.zip",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "bin": "harness.exe",
+  "checkver": "github",
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/Koality-Assured/harness-cli/releases/download/v$version/harness_$version_windows_amd64.zip"
+      },
+      "arm64": {
+        "url": "https://github.com/Koality-Assured/harness-cli/releases/download/v$version/harness_$version_windows_arm64.zip"
+      }
+    }
+  }
+}
