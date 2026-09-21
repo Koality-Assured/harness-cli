@@ -6,11 +6,11 @@
   "architecture": {
     "64bit": {
       "url": "https://github.com/Koality-Assured/harness-cli/releases/download/v0.1.0/harness_0.1.0_windows_amd64.zip",
-      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "hash": "a34c7647597ed7b1f6bcc41a90cc7b89f2a741880ac9168f6ba5086a93e727c0"
     },
     "arm64": {
       "url": "https://github.com/Koality-Assured/harness-cli/releases/download/v0.1.0/harness_0.1.0_windows_arm64.zip",
-      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "hash": "df4878697b042ae4ca3c40be56eb1b01f5965743b0ece22a2262ce6fa4134a85"
     }
   },
   "bin": "harness.exe",
