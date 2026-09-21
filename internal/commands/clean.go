@@ -10,10 +10,11 @@ import (
 )
 
 var (
-	cleanSlug   string
-	cleanMerged bool
-	cleanStale  bool
-	cleanAll    bool
+	cleanSlug       string
+	cleanMerged     bool
+	cleanStale      bool
+	cleanAll        bool
+	cleanStaleHours float64
 )
 
 var cleanCmd = &cobra.Command{
@@ -46,7 +47,12 @@ var cleanCmd = &cobra.Command{
 			}
 		}
 
-		if cleanSlug == "" && !cleanMerged && !cleanStale && !cleanAll {
+		staleThreshold := cleanStaleHours
+		if cleanStale && staleThreshold <= 0 {
+			staleThreshold = 24.0
+		}
+
+		if cleanSlug == "" && !cleanMerged && !cleanStale && !cleanAll && cleanStaleHours <= 0 {
 			fmt.Println("=== Worktree Cleanup Candidates ===")
 			if len(claims) == 0 {
 				fmt.Println("  (no active worktrees or claims)")
@@ -56,7 +62,10 @@ var cleanCmd = &cobra.Command{
 				isMerged := mergedMap[c.Branch]
 				var tags []string
 				if !c.ExistsOnDisk {
-					tags = append(tags, "STALE")
+					tags = append(tags, "MISSING")
+				}
+				if dur, ok := c.Age(); ok && dur.Hours() >= 24.0 {
+					tags = append(tags, fmt.Sprintf("STALE-LOCK(%.0fh)", dur.Hours()))
 				}
 				if isMerged {
 					tags = append(tags, "MERGED")
@@ -66,7 +75,7 @@ var cleanCmd = &cobra.Command{
 				}
 				fmt.Printf("  [%s] %s (%s)\n", strings.Join(tags, "/"), c.Slug, c.Branch)
 			}
-			fmt.Println("\nSpecify --merged, --stale, --slug <slug>, or --all to clean.")
+			fmt.Println("\nSpecify --merged, --stale, --stale-hours <N>, --slug <slug>, or --all to clean.")
 			return nil
 		}
 
@@ -74,6 +83,11 @@ var cleanCmd = &cobra.Command{
 		for _, c := range claims {
 			isMerged := mergedMap[c.Branch]
 			isStale := !c.ExistsOnDisk
+			if staleThreshold > 0 {
+				if dur, ok := c.Age(); ok && dur.Hours() >= staleThreshold {
+					isStale = true
+				}
+			}
 
 			if cleanSlug != "" && c.Slug == cleanSlug {
 				targets = append(targets, c.Slug)
@@ -81,7 +95,7 @@ var cleanCmd = &cobra.Command{
 				targets = append(targets, c.Slug)
 			} else if cleanMerged && isMerged {
 				targets = append(targets, c.Slug)
-			} else if cleanStale && isStale {
+			} else if (cleanStale || cleanStaleHours > 0) && isStale {
 				targets = append(targets, c.Slug)
 			}
 		}
@@ -105,6 +119,7 @@ var cleanCmd = &cobra.Command{
 func init() {
 	cleanCmd.Flags().StringVar(&cleanSlug, "slug", "", "Specific worktree slug to clean")
 	cleanCmd.Flags().BoolVar(&cleanMerged, "merged", false, "Clean all merged worktrees")
-	cleanCmd.Flags().BoolVar(&cleanStale, "stale", false, "Clean all stale claims")
+	cleanCmd.Flags().BoolVar(&cleanStale, "stale", false, "Clean all stale claims (missing worktrees or > 24h old)")
+	cleanCmd.Flags().Float64Var(&cleanStaleHours, "stale-hours", 0, "Prune claims and locks older than specified hours")
 	cleanCmd.Flags().BoolVar(&cleanAll, "all", false, "Clean all worktrees and claims")
 }

@@ -51,6 +51,9 @@ func init() {
 	RootCmd.AddCommand(deregisterCmd)
 	RootCmd.AddCommand(scanCmd)
 	RootCmd.AddCommand(tuiCmd)
+	RootCmd.AddCommand(spokeCmd)
+	RootCmd.AddCommand(claimCmd)
+	RootCmd.AddCommand(execCmd)
 }
 
 // Execute runs the root command.
