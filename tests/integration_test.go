@@ -4,12 +4,26 @@ import (
 	"bytes"
 	"encoding/json"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
 
+func getBinaryPath(t *testing.T) string {
+	binName := "harness-test-bin"
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	tmpBin := filepath.Join(t.TempDir(), binName)
+	cmd := exec.Command("go", "build", "-o", tmpBin, "../cmd/harness")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("failed to build test harness binary: %s (%v)", string(out), err)
+	}
+	return tmpBin
+}
+
 func TestCLIIntegrationSubcommands(t *testing.T) {
-	// Build or locate binary
-	binaryPath := "../harness.exe"
+	binaryPath := getBinaryPath(t)
 
 	// 1. Test status --json
 	cmd := exec.Command(binaryPath, "status", "--json")
@@ -68,5 +82,29 @@ func TestCLIIntegrationSubcommands(t *testing.T) {
 	}
 	if _, ok := authMap["providers"]; !ok {
 		t.Error("auth status JSON missing 'providers'")
+	}
+
+	// 4. Test claim inspect --json
+	stdout.Reset()
+	cmd = exec.Command(binaryPath, "claim", "inspect", "--json")
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("claim inspect --json failed: %v", err)
+	}
+
+	var claimMap map[string]interface{}
+	if err := json.Unmarshal(stdout.Bytes(), &claimMap); err != nil {
+		t.Fatalf("claim inspect --json did not return valid JSON: %v", err)
+	}
+	if _, ok := claimMap["stale_threshold_hours"]; !ok {
+		t.Error("claim inspect JSON missing 'stale_threshold_hours'")
+	}
+
+	// 5. Test clean --dry-run
+	stdout.Reset()
+	cmd = exec.Command(binaryPath, "clean", "--stale-hours", "24", "--dry-run")
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("clean --stale-hours --dry-run failed: %v", err)
 	}
 }
