@@ -43,3 +43,29 @@ changelog:
       - "^docs:"
       - "^test:"
       - "^chore:"
+
+brews:
+  - name: harness
+    repository:
+      owner: Koality-Assured
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/Koality-Assured/harness-cli"
+    description: "Unified Harness CLI Control Plane for domain harnesses and spokes"
+    license: "MIT"
+    install: |
+      bin.install "harness"
+    test: |
+      assert_match "Unified Harness CLI Control Plane", shell_output("#{bin}/harness --help")
+
+scoops:
+  - name: harness
+    repository:
+      owner: Koality-Assured
+      name: scoop-bucket
+      token: "{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}"
+    directory: bucket
+    homepage: "https://github.com/Koality-Assured/harness-cli"
+    description: "Unified Harness CLI Control Plane for domain harnesses and spokes"
+    license: "MIT"

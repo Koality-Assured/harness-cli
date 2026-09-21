@@ -74,6 +74,33 @@ go build -ldflags="-s -w" -o harness ./cmd/harness
 
 ---
 
+## Shell Ergonomics & Profile Integration
+
+`harness` provides native shell autocompletion for subcommands, flags, and parameters across PowerShell, Bash, Zsh, and Fish.
+
+### PowerShell Profile Integration
+Add autocompletion loading to your PowerShell profile (`notepad $PROFILE`):
+
+```powershell
+if (Get-Command harness -ErrorAction SilentlyContinue) {
+    harness completion powershell | Out-String | Invoke-Expression
+}
+```
+
+### Bash Integration
+```bash
+# Add to ~/.bashrc
+source <(harness completion bash)
+```
+
+### Zsh Integration
+```zsh
+# Add to ~/.zshrc
+source <(harness completion zsh)
+```
+
+---
+
 ## License
 
 MIT License. Copyright (c) 2026 Koality-Assured.
