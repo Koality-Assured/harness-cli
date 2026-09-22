@@ -7,6 +7,14 @@ import (
 	"sync"
 )
 
+// Vault is the common interface for secure credential stores.
+type Vault interface {
+	GetCredential(provider string) (*Credential, error)
+	SetCredential(provider string, cred *Credential) error
+	DeleteCredential(provider string) (bool, error)
+	ListProviders() []string
+}
+
 // UniversalVault manages credentials with automatic fallback between OS Keyring and Encrypted File Vault.
 type UniversalVault struct {
 	keyringVault   *KeyringVault

@@ -70,3 +70,10 @@ func TestIsAllowlistedCorePath(t *testing.T) {
 		t.Errorf("scripts/sync tooling should be allowlisted")
 	}
 }
+
+func TestResolvePython(t *testing.T) {
+	py := resolvePython()
+	if py == "" {
+		t.Errorf("expected resolvePython to return a non-empty binary")
+	}
+}

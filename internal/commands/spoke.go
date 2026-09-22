@@ -292,9 +292,10 @@ func syncSingleSpoke(spokePath, spokeID, ref string, dryRun, noFetch bool) Spoke
 	}
 
 	// 6. Run Index Generators if present
+	pyBin := resolvePython()
 	routingGen := filepath.Join(primaryRoot, "scripts", "routing", "generate_routing_index.py")
 	if _, err := os.Stat(routingGen); err == nil {
-		cmd := exec.Command("python", routingGen)
+		cmd := exec.Command(pyBin, routingGen)
 		cmd.Dir = primaryRoot
 		if out, err := cmd.CombinedOutput(); err != nil {
 			res.Warnings = append(res.Warnings, fmt.Sprintf("routing index regeneration warning: %s (%v)", string(out), err))
@@ -305,7 +306,7 @@ func syncSingleSpoke(spokePath, spokeID, ref string, dryRun, noFetch bool) Spoke
 
 	scriptGen := filepath.Join(primaryRoot, "scripts", "routing", "generate_script_index.py")
 	if _, err := os.Stat(scriptGen); err == nil {
-		cmd := exec.Command("python", scriptGen)
+		cmd := exec.Command(pyBin, scriptGen)
 		cmd.Dir = primaryRoot
 		if out, err := cmd.CombinedOutput(); err != nil {
 			res.Warnings = append(res.Warnings, fmt.Sprintf("script index regeneration warning: %s (%v)", string(out), err))
@@ -315,6 +316,17 @@ func syncSingleSpoke(spokePath, spokeID, ref string, dryRun, noFetch bool) Spoke
 	}
 
 	return res
+}
+
+// resolvePython dynamically resolves python3 then python for cross-platform execution.
+func resolvePython() string {
+	if p, err := exec.LookPath("python3"); err == nil {
+		return p
+	}
+	if p, err := exec.LookPath("python"); err == nil {
+		return p
+	}
+	return "python"
 }
 
 var spokeSyncCmd = &cobra.Command{

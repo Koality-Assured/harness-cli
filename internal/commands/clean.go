@@ -15,6 +15,7 @@ var (
 	cleanStale      bool
 	cleanAll        bool
 	cleanStaleHours float64
+	cleanAuto       bool
 )
 
 var cleanCmd = &cobra.Command{
@@ -51,8 +52,11 @@ var cleanCmd = &cobra.Command{
 		if cleanStale && staleThreshold <= 0 {
 			staleThreshold = 24.0
 		}
+		if cleanAuto && staleThreshold <= 0 {
+			staleThreshold = 24.0
+		}
 
-		if cleanSlug == "" && !cleanMerged && !cleanStale && !cleanAll && cleanStaleHours <= 0 {
+		if cleanSlug == "" && !cleanMerged && !cleanStale && !cleanAll && cleanStaleHours <= 0 && !cleanAuto {
 			fmt.Println("=== Worktree Cleanup Candidates ===")
 			if len(claims) == 0 {
 				fmt.Println("  (no active worktrees or claims)")
@@ -93,6 +97,8 @@ var cleanCmd = &cobra.Command{
 				targets = append(targets, c.Slug)
 			} else if cleanAll {
 				targets = append(targets, c.Slug)
+			} else if cleanAuto && (isMerged || isStale) {
+				targets = append(targets, c.Slug)
 			} else if cleanMerged && isMerged {
 				targets = append(targets, c.Slug)
 			} else if (cleanStale || cleanStaleHours > 0) && isStale {
@@ -121,5 +127,6 @@ func init() {
 	cleanCmd.Flags().BoolVar(&cleanMerged, "merged", false, "Clean all merged worktrees")
 	cleanCmd.Flags().BoolVar(&cleanStale, "stale", false, "Clean all stale claims (missing worktrees or > 24h old)")
 	cleanCmd.Flags().Float64Var(&cleanStaleHours, "stale-hours", 0, "Prune claims and locks older than specified hours")
+	cleanCmd.Flags().BoolVar(&cleanAuto, "auto", false, "Automatically prune merged and stale worktrees non-interactively")
 	cleanCmd.Flags().BoolVar(&cleanAll, "all", false, "Clean all worktrees and claims")
 }
