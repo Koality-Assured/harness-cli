@@ -2,6 +2,7 @@ package git
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,6 +17,8 @@ type Claim struct {
 	Areas        []string `json:"areas"`
 	Agent        string   `json:"agent"`
 	CreatedAt    string   `json:"created_at"`
+	TTLHours     float64  `json:"ttl_hours,omitempty"`
+	ExpiresAt    string   `json:"expires_at,omitempty"`
 	Path         string   `json:"path"`
 	ExistsOnDisk bool     `json:"exists_on_disk"`
 	Error        string   `json:"error,omitempty"`
@@ -54,6 +57,22 @@ func (c Claim) ParseCreatedAt() (time.Time, error) {
 	return time.Parse("2006-01-02T15:04:05", c.CreatedAt)
 }
 
+// ParseExpiresAt attempts to parse the ExpiresAt string into a time.Time.
+func (c Claim) ParseExpiresAt() (time.Time, error) {
+	if c.ExpiresAt == "" {
+		return time.Time{}, os.ErrNotExist
+	}
+	t, err := time.Parse(time.RFC3339Nano, c.ExpiresAt)
+	if err == nil {
+		return t, nil
+	}
+	t, err = time.Parse(time.RFC3339, c.ExpiresAt)
+	if err == nil {
+		return t, nil
+	}
+	return time.Parse("2006-01-02T15:04:05", c.ExpiresAt)
+}
+
 // Age returns the duration elapsed since the claim was created.
 func (c Claim) Age() (time.Duration, bool) {
 	t, err := c.ParseCreatedAt()
@@ -67,6 +86,16 @@ func (c Claim) Age() (time.Duration, bool) {
 func (c Claim) CheckStale(thresholdHours float64) (bool, string) {
 	if !c.ExistsOnDisk {
 		return true, "worktree directory does not exist on disk"
+	}
+	if exp, err := c.ParseExpiresAt(); err == nil {
+		if time.Now().UTC().After(exp) {
+			return true, "claim lease TTL expired"
+		}
+	} else if c.TTLHours > 0 {
+		dur, ok := c.Age()
+		if ok && dur.Hours() >= c.TTLHours {
+			return true, fmt.Sprintf("claim lock duration exceeds TTL (%.1fh)", c.TTLHours)
+		}
 	}
 	if thresholdHours > 0 {
 		dur, ok := c.Age()
@@ -125,6 +154,15 @@ func LoadClaims(primaryRoot string) []Claim {
 					StaleReason:  "corrupted claim file",
 				})
 				continue
+			}
+
+			if c.CreatedAt == "" {
+				var raw map[string]interface{}
+				if err := json.Unmarshal(data, &raw); err == nil {
+					if cr, ok := raw["created"].(string); ok && cr != "" {
+						c.CreatedAt = cr
+					}
+				}
 			}
 
 			if c.Slug == "" {

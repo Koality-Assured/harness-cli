@@ -338,8 +338,9 @@ Strictly preserves spoke-specific domain taxonomy in routing/areas.yaml and isol
 		if spokeSyncAll {
 			entries := reg.ListHarnesses()
 			for _, e := range entries {
-				// Don't sync the core repo into itself if registered
-				if strings.Contains(strings.ToLower(e.Name), "core") || strings.Contains(strings.ToLower(e.ID), "core") {
+				// Don't sync the core repo or ai-router orchestrator if registered
+				if strings.Contains(strings.ToLower(e.Name), "core") || strings.Contains(strings.ToLower(e.ID), "core") ||
+					strings.EqualFold(e.ID, "ai-router") || strings.EqualFold(e.Name, "ai-router") {
 					continue
 				}
 				targets = append(targets, Target{ID: e.ID, Path: e.Path})

@@ -1,7 +1,7 @@
 class Harness < Formula
   desc "Unified Harness CLI Control Plane for domain harnesses and spokes"
   homepage "https://github.com/Koality-Assured/harness-cli"
-  version "0.2.0"
+  version "0.3.0"
   license "MIT"
 
   on_macos do
