@@ -1,10 +1,14 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Koality-Assured/harness-cli/internal/git"
@@ -13,8 +17,10 @@ import (
 )
 
 var (
-	claimAllHarnesses bool
-	claimStaleHours   float64
+	claimAllHarnesses    bool
+	claimStaleHours      float64
+	claimWatchInterval   string
+	claimWatchStaleHours float64
 )
 
 var claimCmd = &cobra.Command{
@@ -211,9 +217,95 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dd%dh", days, remHours)
 }
 
+// RunClaimWatcher polls registered domain harnesses at the specified interval and writes stale claim warnings to out.
+// It stops when ctx is cancelled.
+func RunClaimWatcher(ctx context.Context, interval time.Duration, staleHours float64, reg *registry.HarnessRegistry, out io.Writer) error {
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	if staleHours <= 0 {
+		staleHours = 24.0
+	}
+	if out == nil {
+		out = os.Stderr
+	}
+
+	checkClaims := func() {
+		entries := reg.ListHarnesses()
+		for _, e := range entries {
+			primaryRoot, err := git.GetPrimaryRepoRoot(e.Path)
+			if err != nil {
+				continue
+			}
+			claims := git.LoadClaims(primaryRoot)
+			for _, c := range claims {
+				stale, reason := c.CheckStale(staleHours)
+				if stale {
+					ageHuman := "-"
+					if dur, ok := c.Age(); ok {
+						ageHuman = formatDuration(dur)
+					}
+					reasonStr := ""
+					if reason != "" {
+						reasonStr = fmt.Sprintf(" (%s)", reason)
+					}
+					fmt.Fprintf(out, "[WARNING] Stale worktree claim detected (> %.0fh old%s): '%s' in %s (created %s ago by agent '%s')\n",
+						staleHours, reasonStr, c.Slug, e.ID, ageHuman, c.Agent)
+				}
+			}
+		}
+	}
+
+	// Run initial inspection immediately
+	checkClaims()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			checkClaims()
+		}
+	}
+}
+
+var claimWatchCmd = &cobra.Command{
+	Use:   "watch",
+	Short: "Continuously monitor registered domain harnesses for stale worktree claims",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		intervalDur, err := time.ParseDuration(claimWatchInterval)
+		if err != nil {
+			return fmt.Errorf("invalid interval duration %q: %w", claimWatchInterval, err)
+		}
+
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+
+		fmt.Printf("Starting claim watcher daemon (polling every %v, stale threshold: %.0fh)...\n",
+			intervalDur, claimWatchStaleHours)
+		fmt.Println("Press Ctrl+C to terminate gracefully.")
+
+		reg := registry.GetRegistry()
+		err = RunClaimWatcher(ctx, intervalDur, claimWatchStaleHours, reg, os.Stderr)
+		if err != nil && err != context.Canceled {
+			return err
+		}
+
+		fmt.Println("\nGracefully shutting down claim watcher daemon.")
+		return nil
+	},
+}
+
 func init() {
 	claimInspectCmd.Flags().BoolVar(&claimAllHarnesses, "all", false, "Inspect claims across all registered domain harnesses")
 	claimInspectCmd.Flags().Float64Var(&claimStaleHours, "stale-hours", 24.0, "Threshold in hours before a lock claim is considered stale")
 
+	claimWatchCmd.Flags().StringVar(&claimWatchInterval, "interval", "5m", "Polling interval for claim status check (e.g. 30s, 5m, 1h)")
+	claimWatchCmd.Flags().Float64Var(&claimWatchStaleHours, "stale-hours", 24.0, "Threshold in hours before a lock claim is considered stale")
+
 	claimCmd.AddCommand(claimInspectCmd)
+	claimCmd.AddCommand(claimWatchCmd)
 }

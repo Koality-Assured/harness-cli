@@ -1,13 +1,18 @@
 package tests
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Koality-Assured/harness-cli/internal/commands"
 	"github.com/Koality-Assured/harness-cli/internal/git"
+	"github.com/Koality-Assured/harness-cli/internal/registry"
 )
 
 func TestClaimTimestampParsingAndStaleDetection(t *testing.T) {
@@ -52,6 +57,30 @@ func TestClaimTimestampParsingAndStaleDetection(t *testing.T) {
 	stale, _ = missingClaim.CheckStale(24.0)
 	if !stale {
 		t.Errorf("claim with missing worktree on disk should always be stale")
+	}
+
+	// 4. Claim with TTL lease expiry in past
+	expiredLeaseClaim := git.Claim{
+		Slug:         "expired-lease",
+		CreatedAt:    time.Now().UTC().Add(-3 * time.Hour).Format(time.RFC3339),
+		ExpiresAt:    time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339),
+		ExistsOnDisk: true,
+	}
+	stale, reason = expiredLeaseClaim.CheckStale(24.0)
+	if !stale || !strings.Contains(reason, "TTL expired") {
+		t.Errorf("claim with past expires_at should be stale with TTL expired reason, got %v (%s)", stale, reason)
+	}
+
+	// 5. Claim with TTL lease in future
+	futureLeaseClaim := git.Claim{
+		Slug:         "future-lease",
+		CreatedAt:    time.Now().UTC().Add(-3 * time.Hour).Format(time.RFC3339),
+		ExpiresAt:    time.Now().UTC().Add(5 * time.Hour).Format(time.RFC3339),
+		ExistsOnDisk: true,
+	}
+	stale, _ = futureLeaseClaim.CheckStale(24.0)
+	if stale {
+		t.Errorf("claim with future expires_at should not be stale")
 	}
 }
 
@@ -108,5 +137,65 @@ func TestLoadClaimsDualDirectories(t *testing.T) {
 	c2, ok2 := claimMap["feat-git-claim"]
 	if !ok2 || !c2.IsStale {
 		t.Errorf("feat-git-claim should exist and be flagged stale (> 30h old)")
+	}
+}
+
+func TestClaimWatcherLoopAndCancellation(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "harness-watcher-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfgPath := filepath.Join(tmpDir, "config.json")
+	reg := registry.NewHarnessRegistry(cfgPath)
+
+	fakeRepo := filepath.Join(tmpDir, "test-repo")
+	_ = os.MkdirAll(filepath.Join(fakeRepo, ".git"), 0755)
+	wtDir := filepath.Join(fakeRepo, "scratch", "worktrees")
+	_ = os.MkdirAll(filepath.Join(wtDir, "stale-worker"), 0755)
+
+	staleClaim := git.Claim{
+		Slug:      "stale-worker",
+		Branch:    "feat/stale",
+		Areas:     []string{"core"},
+		Agent:     "test-agent",
+		CreatedAt: time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339),
+	}
+	claimData, _ := json.Marshal(staleClaim)
+	_ = os.WriteFile(filepath.Join(wtDir, "stale-worker.claim.json"), claimData, 0644)
+
+	_, err = reg.Register(fakeRepo, "Test Repo", "Test Domain", true, false)
+	if err != nil {
+		t.Fatalf("failed to register repo: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var outBuf bytes.Buffer
+
+	doneChan := make(chan error, 1)
+	go func() {
+		doneChan <- commands.RunClaimWatcher(ctx, 20*time.Millisecond, 24.0, reg, &outBuf)
+	}()
+
+	// Allow initial check and at least one tick
+	time.Sleep(60 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-doneChan:
+		if err != nil && err != context.Canceled {
+			t.Errorf("unexpected error from RunClaimWatcher: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("RunClaimWatcher failed to stop after context cancellation")
+	}
+
+	outStr := outBuf.String()
+	if !strings.Contains(outStr, "[WARNING] Stale worktree claim detected") {
+		t.Errorf("expected stale claim warning in watcher output, got: %s", outStr)
+	}
+	if !strings.Contains(outStr, "stale-worker") {
+		t.Errorf("expected slug 'stale-worker' in watcher output, got: %s", outStr)
 	}
 }
