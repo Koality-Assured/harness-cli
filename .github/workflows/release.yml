@@ -23,13 +23,34 @@ jobs:
           go-version: '1.23'
           cache: true
 
+      - name: Compute GoReleaser arguments
+        id: release_args
+        run: |
+          SKIPS=""
+          if [ -z "${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN || secrets.GH_PAT }}" ]; then
+            SKIPS="homebrew"
+          fi
+          if [ -z "${{ secrets.SCOOP_BUCKET_GITHUB_TOKEN || secrets.GH_PAT }}" ]; then
+            if [ -n "$SKIPS" ]; then
+              SKIPS="$SKIPS,scoop"
+            else
+              SKIPS="scoop"
+            fi
+          fi
+          ARGS="release --clean"
+          if [ -n "$SKIPS" ]; then
+            ARGS="$ARGS --skip=$SKIPS"
+          fi
+          echo "Computed release arguments: $ARGS"
+          echo "args=$ARGS" >> $GITHUB_OUTPUT
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: '~> v2'
-          args: release --clean
+          args: ${{ steps.release_args.outputs.args }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN || secrets.GH_PAT || secrets.GITHUB_TOKEN }}
-          SCOOP_BUCKET_GITHUB_TOKEN: ${{ secrets.SCOOP_BUCKET_GITHUB_TOKEN || secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN || secrets.GH_PAT || '' }}
+          SCOOP_BUCKET_GITHUB_TOKEN: ${{ secrets.SCOOP_BUCKET_GITHUB_TOKEN || secrets.GH_PAT || '' }}
