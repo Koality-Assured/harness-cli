@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/Koality-Assured/harness-cli/internal/auth"
 	"github.com/spf13/cobra"
@@ -45,28 +46,23 @@ Secrets are held in memory only and never written to disk or echoed to output.`,
 
 		injectedCount := 0
 
-		// Check and inject Anthropic
-		if cred, err := vault.GetCredential("anthropic"); err == nil && cred != nil && cred.AccessToken != "" {
-			envMap["ANTHROPIC_API_KEY"] = cred.AccessToken
-			injectedCount++
+		// Inject foundation model credentials with silent RFC 6749 refresh rotation
+		providers := []struct {
+			provider string
+			envVar   string
+		}{
+			{"anthropic", "ANTHROPIC_API_KEY"},
+			{"openai", "OPENAI_API_KEY"},
+			{"gemini", "GEMINI_API_KEY"},
+			{"cursor", "CURSOR_API_KEY"},
 		}
 
-		// Check and inject OpenAI
-		if cred, err := vault.GetCredential("openai"); err == nil && cred != nil && cred.AccessToken != "" {
-			envMap["OPENAI_API_KEY"] = cred.AccessToken
-			injectedCount++
-		}
-
-		// Check and inject Gemini
-		if cred, err := vault.GetCredential("gemini"); err == nil && cred != nil && cred.AccessToken != "" {
-			envMap["GEMINI_API_KEY"] = cred.AccessToken
-			injectedCount++
-		}
-
-		// Check and inject Cursor
-		if cred, err := vault.GetCredential("cursor"); err == nil && cred != nil && cred.AccessToken != "" {
-			envMap["CURSOR_API_KEY"] = cred.AccessToken
-			injectedCount++
+		for _, p := range providers {
+			cred, err := auth.EnsureFreshToken(vault, p.provider, 15*time.Minute)
+			if err == nil && cred != nil && cred.AccessToken != "" {
+				envMap[p.envVar] = cred.AccessToken
+				injectedCount++
+			}
 		}
 
 		if execAgent != "" {

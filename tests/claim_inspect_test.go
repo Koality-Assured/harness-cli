@@ -199,3 +199,71 @@ func TestClaimWatcherLoopAndCancellation(t *testing.T) {
 		t.Errorf("expected slug 'stale-worker' in watcher output, got: %s", outStr)
 	}
 }
+
+func TestClaimWatcherAutoClean(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "harness-claim-autoclean-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	configPath := filepath.Join(tmpDir, "harness.config.json")
+	reg := registry.NewHarnessRegistry(configPath)
+
+	fakeRepo := filepath.Join(tmpDir, "domain-repo")
+	_ = os.MkdirAll(filepath.Join(fakeRepo, ".git"), 0755)
+	wtDir := filepath.Join(fakeRepo, "scratch", "worktrees")
+	_ = os.MkdirAll(wtDir, 0755)
+
+	// Write stale claim
+	staleClaim := git.Claim{
+		Slug:         "orphaned-tree",
+		Branch:       "feat/orphaned",
+		Areas:        []string{"core"},
+		Agent:        "test-agent",
+		CreatedAt:    time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339),
+		ExistsOnDisk: false,
+	}
+	claimData, _ := json.Marshal(staleClaim)
+	claimFile := filepath.Join(wtDir, "orphaned-tree.claim.json")
+	_ = os.WriteFile(claimFile, claimData, 0644)
+
+	_, err = reg.Register(fakeRepo, "AutoClean Repo", "Test Domain", true, false)
+	if err != nil {
+		t.Fatalf("failed to register repo: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var outBuf bytes.Buffer
+
+	doneChan := make(chan error, 1)
+	go func() {
+		// Run with autoClean=true
+		doneChan <- commands.RunClaimWatcher(ctx, 20*time.Millisecond, 24.0, reg, &outBuf, true)
+	}()
+
+	time.Sleep(60 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-doneChan:
+		if err != nil && err != context.Canceled {
+			t.Errorf("unexpected error from RunClaimWatcher: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("RunClaimWatcher failed to stop after context cancellation")
+	}
+
+	outStr := outBuf.String()
+	if !strings.Contains(outStr, "[AUTO-CLEAN]") {
+		t.Errorf("expected [AUTO-CLEAN] in watcher output, got: %s", outStr)
+	}
+	if !strings.Contains(outStr, "orphaned-tree") {
+		t.Errorf("expected slug 'orphaned-tree' in watcher output, got: %s", outStr)
+	}
+
+	// Verify claim file was pruned
+	if _, err := os.Stat(claimFile); !os.IsNotExist(err) {
+		t.Errorf("expected claim file %s to be removed by auto-clean", claimFile)
+	}
+}

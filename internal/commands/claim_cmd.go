@@ -218,8 +218,9 @@ func formatDuration(d time.Duration) string {
 }
 
 // RunClaimWatcher polls registered domain harnesses at the specified interval and writes stale claim warnings to out.
+// If autoClean is enabled, it automatically prunes stale or merged worktrees non-interactively.
 // It stops when ctx is cancelled.
-func RunClaimWatcher(ctx context.Context, interval time.Duration, staleHours float64, reg *registry.HarnessRegistry, out io.Writer) error {
+func RunClaimWatcher(ctx context.Context, interval time.Duration, staleHours float64, reg *registry.HarnessRegistry, out io.Writer, autoClean ...bool) error {
 	if interval <= 0 {
 		interval = 5 * time.Minute
 	}
@@ -229,6 +230,7 @@ func RunClaimWatcher(ctx context.Context, interval time.Duration, staleHours flo
 	if out == nil {
 		out = os.Stderr
 	}
+	doAutoClean := len(autoClean) > 0 && autoClean[0]
 
 	checkClaims := func() {
 		entries := reg.ListHarnesses()
@@ -237,9 +239,33 @@ func RunClaimWatcher(ctx context.Context, interval time.Duration, staleHours flo
 			if err != nil {
 				continue
 			}
+
+			mergedMap := make(map[string]bool)
+			if mergedOut, err := git.RunGit(primaryRoot, "branch", "--merged", "main"); err == nil && mergedOut != "" {
+				for _, b := range strings.Split(mergedOut, "\n") {
+					cleanB := strings.TrimSpace(strings.TrimLeft(b, "*+ "))
+					if cleanB != "" {
+						mergedMap[cleanB] = true
+					}
+				}
+			}
+
 			claims := git.LoadClaims(primaryRoot)
 			for _, c := range claims {
 				stale, reason := c.CheckStale(staleHours)
+				isMerged := mergedMap[c.Branch]
+
+				if doAutoClean && (stale || isMerged) {
+					pruneReason := reason
+					if isMerged {
+						pruneReason = "branch merged into main"
+					}
+					if err := git.RemoveWorktree(primaryRoot, c.Slug, true, false); err == nil {
+						fmt.Fprintf(out, "[AUTO-CLEAN] Pruned worktree '%s' in %s (%s)\n", c.Slug, e.ID, pruneReason)
+						continue
+					}
+				}
+
 				if stale {
 					ageHuman := "-"
 					if dur, ok := c.Age(); ok {
@@ -272,6 +298,10 @@ func RunClaimWatcher(ctx context.Context, interval time.Duration, staleHours flo
 	}
 }
 
+var (
+	claimWatchAutoClean bool
+)
+
 var claimWatchCmd = &cobra.Command{
 	Use:   "watch",
 	Short: "Continuously monitor registered domain harnesses for stale worktree claims",
@@ -284,12 +314,12 @@ var claimWatchCmd = &cobra.Command{
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
-		fmt.Printf("Starting claim watcher daemon (polling every %v, stale threshold: %.0fh)...\n",
-			intervalDur, claimWatchStaleHours)
+		fmt.Printf("Starting claim watcher daemon (polling every %v, stale threshold: %.0fh, auto-clean: %v)...\n",
+			intervalDur, claimWatchStaleHours, claimWatchAutoClean)
 		fmt.Println("Press Ctrl+C to terminate gracefully.")
 
 		reg := registry.GetRegistry()
-		err = RunClaimWatcher(ctx, intervalDur, claimWatchStaleHours, reg, os.Stderr)
+		err = RunClaimWatcher(ctx, intervalDur, claimWatchStaleHours, reg, os.Stderr, claimWatchAutoClean)
 		if err != nil && err != context.Canceled {
 			return err
 		}
@@ -305,6 +335,7 @@ func init() {
 
 	claimWatchCmd.Flags().StringVar(&claimWatchInterval, "interval", "5m", "Polling interval for claim status check (e.g. 30s, 5m, 1h)")
 	claimWatchCmd.Flags().Float64Var(&claimWatchStaleHours, "stale-hours", 24.0, "Threshold in hours before a lock claim is considered stale")
+	claimWatchCmd.Flags().BoolVar(&claimWatchAutoClean, "auto-clean", false, "Automatically prune expired or merged worktrees")
 
 	claimCmd.AddCommand(claimInspectCmd)
 	claimCmd.AddCommand(claimWatchCmd)
