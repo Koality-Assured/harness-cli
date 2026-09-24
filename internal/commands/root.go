@@ -54,6 +54,7 @@ func init() {
 	RootCmd.AddCommand(spokeCmd)
 	RootCmd.AddCommand(claimCmd)
 	RootCmd.AddCommand(execCmd)
+	registerConversationCommands()
 }
 
 // Execute runs the root command.
