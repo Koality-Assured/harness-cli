@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -73,17 +75,48 @@ func AddWorktree(primaryRoot, slug, branch string, areas []string, agent string,
 	return claim, nil
 }
 
-// RemoveWorktree prunes a worktree and deletes its claim JSON.
+// worktreeRemovalOps keeps the destructive fallback injectable for deterministic tests.
+type worktreeRemovalOps struct {
+	runGit    func(cwd string, args ...string) (string, error)
+	removeAll func(path string) error
+	remove    func(path string) error
+}
+
+// RemoveWorktree removes a worktree and deletes its claim JSON only after removal is verified.
 func RemoveWorktree(primaryRoot, slug string, force, dryRun bool) error {
+	return removeWorktreeWithOps(primaryRoot, slug, force, dryRun, worktreeRemovalOps{
+		runGit:    RunGit,
+		removeAll: os.RemoveAll,
+		remove:    os.Remove,
+	})
+}
+
+func removeWorktreeWithOps(primaryRoot, slug string, force, dryRun bool, ops worktreeRemovalOps) error {
 	wtDir := GetWorktreesDir(primaryRoot)
 	targetPath := filepath.Join(wtDir, slug)
 	claimFilePath := filepath.Join(wtDir, slug+".claim.json")
 
+	_, statErr := os.Lstat(targetPath)
+	targetExists := statErr == nil
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return fmt.Errorf("failed to inspect worktree: %w", statErr)
+	}
+
+	// Dry runs still report whether an unforced removal would be blocked.
 	if dryRun {
+		if targetExists && !force {
+			reason, _, err := inspectWorktreeDeleteGate(targetPath, "main")
+			if err != nil {
+				return err
+			}
+			if reason != "" {
+				return fmt.Errorf("%s (pass --force to override)", reason)
+			}
+		}
 		return nil
 	}
 
-	// Acquire claim lock
+	// Acquire claim lock before inspecting and removing the worktree.
 	lock, err := AcquireClaimLock(wtDir, 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("failed to acquire claim lock: %w", err)
@@ -92,27 +125,115 @@ func RemoveWorktree(primaryRoot, slug string, force, dryRun bool) error {
 		_ = lock.Release()
 	}()
 
-	// Run git worktree remove if directory exists
-	if _, err := os.Stat(targetPath); err == nil {
+	// Recheck existence and inspect the deletion gate under the claim lock.
+	_, statErr = os.Lstat(targetPath)
+	targetExists = statErr == nil
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return fmt.Errorf("failed to inspect worktree: %w", statErr)
+	}
+	if targetExists {
+		hasUntracked := false
+		if !force {
+			reason, untracked, err := inspectWorktreeDeleteGate(targetPath, "main")
+			if err != nil {
+				return err
+			}
+			if reason != "" {
+				return fmt.Errorf("%s (pass --force to override)", reason)
+			}
+			hasUntracked = untracked
+		}
+
 		args := []string{"worktree", "remove", targetPath}
-		if force {
+		// Git requires --force to remove untracked-only worktrees. This is safe
+		// after the gate has confirmed there are no tracked edits or base commits.
+		if force || hasUntracked {
 			args = append(args, "--force")
 		}
-		if _, err := RunGit(primaryRoot, args...); err != nil {
-			// If git fails but force is set, remove folder manually
-			if force {
-				_ = os.RemoveAll(targetPath)
-				_, _ = RunGit(primaryRoot, "worktree", "prune")
-			} else {
+		if _, err := ops.runGit(primaryRoot, args...); err != nil {
+			if !force {
 				return fmt.Errorf("failed to remove git worktree: %w", err)
+			}
+			// The explicit --force fallback must succeed completely before its
+			// claim can be removed. Keep the claim on either fallback failure.
+			removeErr := ops.removeAll(targetPath)
+			if removeErr != nil {
+				return fmt.Errorf("forced worktree removal fallback failed after git error (%v): %w", err, removeErr)
+			}
+			if _, targetRemoveErr := ops.runGit(primaryRoot, "worktree", "remove", "--force", targetPath); targetRemoveErr != nil {
+				if verifyErr := verifyWorktreeRemoved(primaryRoot, targetPath, ops.runGit); verifyErr != nil {
+					return fmt.Errorf("forced worktree removal fallback failed after git error (%v): %w; verification: %v", err, targetRemoveErr, verifyErr)
+				}
+			}
+		}
+	} else {
+		// Do not prune repository-wide: only remove this registration if Git still
+		// lists the missing target. A missing path with no registration is an
+		// ordinary stale claim and needs no Git mutation.
+		registrations, err := ops.runGit(primaryRoot, "worktree", "list", "--porcelain")
+		if err != nil {
+			return fmt.Errorf("could not inspect Git worktree registrations: %w", err)
+		}
+		if worktreeListContainsPath(registrations, targetPath) {
+			if _, err := ops.runGit(primaryRoot, "worktree", "remove", "--force", targetPath); err != nil {
+				// Git may have completed the removal while returning an error. Accept
+				// that only if the target path and registration are both gone.
+				if verifyErr := verifyWorktreeRemoved(primaryRoot, targetPath, ops.runGit); verifyErr != nil {
+					return fmt.Errorf("failed to remove missing Git worktree registration: %w; verification: %v", err, verifyErr)
+				}
 			}
 		}
 	}
-
-	// Delete claim file
-	if err := os.Remove(claimFilePath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove claim file: %w", err)
+	if err := verifyWorktreeRemoved(primaryRoot, targetPath, ops.runGit); err != nil {
+		return err
 	}
 
+	// A claim is deleted only after the path and Git registration are both gone.
+	if err := ops.remove(claimFilePath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove claim file: %w", err)
+	}
 	return nil
+}
+
+func verifyWorktreeRemoved(primaryRoot, targetPath string, runGit func(cwd string, args ...string) (string, error)) error {
+	if _, err := os.Lstat(targetPath); err == nil {
+		return fmt.Errorf("worktree path still exists after removal: %s", targetPath)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("could not verify worktree path removal: %w", err)
+	}
+
+	registrations, err := runGit(primaryRoot, "worktree", "list", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("could not verify Git worktree removal: %w", err)
+	}
+	if worktreeListContainsPath(registrations, targetPath) {
+		return fmt.Errorf("Git still registers worktree after removal: %s", targetPath)
+	}
+	return nil
+}
+
+func worktreeListContainsPath(output, wantedPath string) bool {
+	wanted := normalizedWorktreePath(wantedPath)
+	for _, line := range strings.Split(output, "\n") {
+		path, ok := strings.CutPrefix(line, "worktree ")
+		if ok && sameWorktreePath(normalizedWorktreePath(path), wanted) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizedWorktreePath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		path = abs
+	}
+	return filepath.Clean(path)
+}
+
+func sameWorktreePath(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
