@@ -211,7 +211,12 @@ func TestClaimWatcherAutoClean(t *testing.T) {
 	reg := registry.NewHarnessRegistry(configPath)
 
 	fakeRepo := filepath.Join(tmpDir, "domain-repo")
-	_ = os.MkdirAll(filepath.Join(fakeRepo, ".git"), 0755)
+	if err := os.MkdirAll(fakeRepo, 0755); err != nil {
+		t.Fatalf("create test repository directory: %v", err)
+	}
+	if _, err := git.RunGit(fakeRepo, "init", "--initial-branch=main"); err != nil {
+		t.Fatalf("initialize test repository: %v", err)
+	}
 	wtDir := filepath.Join(fakeRepo, "scratch", "worktrees")
 	_ = os.MkdirAll(wtDir, 0755)
 

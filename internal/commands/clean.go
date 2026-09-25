@@ -112,10 +112,15 @@ var cleanCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Cleaning %d worktree(s): %s\n", len(targets), strings.Join(targets, ", "))
+		var failures []string
 		for _, slug := range targets {
 			if err := git.RemoveWorktree(primaryRoot, slug, Force, DryRun); err != nil {
 				fmt.Printf("warning: failed to remove worktree '%s': %v\n", slug, err)
+				failures = append(failures, fmt.Sprintf("%s: %v", slug, err))
 			}
+		}
+		if len(failures) > 0 {
+			return fmt.Errorf("failed to clean %d worktree(s): %s", len(failures), strings.Join(failures, "; "))
 		}
 
 		return nil
