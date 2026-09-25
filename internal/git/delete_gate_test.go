@@ -124,7 +124,7 @@ func TestRemoveWorktreeMissingPathDoesNotPruneUnrelatedRegistrations(t *testing.
 	if err != nil {
 		t.Fatalf("list worktrees before target removal: %v", err)
 	}
-	if !worktreeListContainsPath(registrations, worktreePath) || !worktreeListContainsPath(registrations, unrelatedPath) {
+	if !worktreeListContainsPathForTest(t, registrations, worktreePath) || !worktreeListContainsPathForTest(t, registrations, unrelatedPath) {
 		t.Fatalf("expected Git to retain registrations for both missing paths, got:\n%s", registrations)
 	}
 
@@ -146,7 +146,7 @@ func TestRemoveWorktreeMissingPathDoesNotPruneUnrelatedRegistrations(t *testing.
 	if listErr != nil {
 		t.Fatalf("list worktrees after target cleanup: %v", listErr)
 	}
-	targetStillRegistered := worktreeListContainsPath(registrations, worktreePath)
+	targetStillRegistered := worktreeListContainsPathForTest(t, registrations, worktreePath)
 	t.Logf("target-specific removal left registration=%t; cleanup error=%v", targetStillRegistered, err)
 	if targetStillRegistered {
 		if err == nil {
@@ -163,12 +163,125 @@ func TestRemoveWorktreeMissingPathDoesNotPruneUnrelatedRegistrations(t *testing.
 			t.Fatalf("claim was not removed after target registration disappeared: %v", statErr)
 		}
 	}
-	if !worktreeListContainsPath(registrations, unrelatedPath) {
+	if !worktreeListContainsPathForTest(t, registrations, unrelatedPath) {
 		t.Fatalf("cleanup changed the unrelated missing worktree registration:\n%s", registrations)
 	}
 	if _, statErr := os.Stat(unrelatedClaimPath); statErr != nil {
 		t.Fatalf("cleanup changed the unrelated worktree claim: %v", statErr)
 	}
+}
+
+func TestWorktreeListContainsPathResolvesSymlinkedAncestor(t *testing.T) {
+	root := t.TempDir()
+	realRoot := filepath.Join(root, "real-root")
+	aliasRoot := filepath.Join(root, "alias-root")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realRoot, aliasRoot); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+
+	const slug = "missing-worktree"
+	physicalPath := filepath.Join(realRoot, slug)
+	symlinkedPath := filepath.Join(aliasRoot, slug)
+	if err := os.RemoveAll(physicalPath); err != nil {
+		t.Fatal(err)
+	}
+
+	gitOutput := "worktree " + symlinkedPath + "\n"
+	if !worktreeListContainsPathForTest(t, gitOutput, physicalPath) {
+		t.Fatalf("Git path %q did not match missing worktree path through symlink ancestor %q", symlinkedPath, physicalPath)
+	}
+	gitOutput = "worktree " + physicalPath + "\n"
+	if !worktreeListContainsPathForTest(t, gitOutput, symlinkedPath) {
+		t.Fatalf("physical Git path %q did not match missing worktree path through symlink ancestor %q", physicalPath, symlinkedPath)
+	}
+}
+
+func TestWorktreeListContainsPathFailsClosedForDanglingSymlinkAncestor(t *testing.T) {
+	root := t.TempDir()
+	resolvedRoot := filepath.Join(root, "resolved-root")
+	danglingRoot := filepath.Join(root, "dangling-root")
+	if err := os.Symlink(resolvedRoot, danglingRoot); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+
+	const slug = "missing-worktree"
+	registrationAtResolvedTarget := filepath.Join(resolvedRoot, slug)
+	wantedThroughDanglingAncestor := filepath.Join(danglingRoot, slug)
+	contains, err := worktreeListContainsPath("worktree "+registrationAtResolvedTarget+"\n", wantedThroughDanglingAncestor)
+	if err == nil {
+		t.Fatalf("path comparison = (%t, nil), want a resolution error for dangling symlink ancestor", contains)
+	}
+	if contains {
+		t.Fatalf("path comparison reported a match despite unresolved path identity")
+	}
+}
+
+func TestVerifyWorktreeRemovedFailsClosedForDanglingSymlinkAncestor(t *testing.T) {
+	root := t.TempDir()
+	resolvedRoot := filepath.Join(root, "resolved-root")
+	danglingRoot := filepath.Join(root, "dangling-root")
+	if err := os.Symlink(resolvedRoot, danglingRoot); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+
+	targetPath := filepath.Join(danglingRoot, "missing-worktree")
+	registeredAtResolvedTarget := filepath.Join(resolvedRoot, "missing-worktree")
+	runGit := func(cwd string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "worktree" && args[1] == "list" {
+			return "worktree " + registeredAtResolvedTarget + "\n", nil
+		}
+		return "", fmt.Errorf("unexpected Git command in verify fail-closed test: %v", args)
+	}
+
+	err := verifyWorktreeRemoved(root, targetPath, runGit)
+	if err == nil || !strings.Contains(err.Error(), "could not verify Git worktree path identity") {
+		t.Fatalf("verification error = %v, want fail-closed path identity error", err)
+	}
+}
+
+func TestRemoveWorktreeDanglingRegistrationAliasPreservesClaim(t *testing.T) {
+	root := setupDeleteGateRepo(t)
+	worktreePath := filepath.Join(GetWorktreesDir(root), "dangling-target")
+	claimPath := filepath.Join(GetWorktreesDir(root), "dangling-target.claim.json")
+	if err := os.WriteFile(claimPath, []byte(`{"slug":"dangling-target"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registrationAlias := filepath.Join(GetWorktreesDir(root), "dangling-alias")
+	if err := os.Symlink(worktreePath, registrationAlias); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+
+	runGit := func(cwd string, args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "worktree" && args[1] == "list" {
+			// The alias is dangling, but its intended physical destination is the
+			// requested worktree path. Include the physical spelling too: cleanup
+			// must not delete the claim while either path identity is unresolved.
+			return "worktree " + registrationAlias + "\nworktree " + worktreePath + "\n", nil
+		}
+		return "", fmt.Errorf("unexpected Git command in fail-closed test: %v", args)
+	}
+
+	err := removeWorktreeWithOps(root, "dangling-target", false, false, worktreeRemovalOps{
+		runGit: runGit, removeAll: os.RemoveAll, remove: os.Remove,
+	})
+	if err == nil || !strings.Contains(err.Error(), "could not compare Git worktree registrations") {
+		t.Fatalf("cleanup error = %v, want fail-closed path identity error", err)
+	}
+	if _, err := os.Stat(claimPath); err != nil {
+		t.Fatalf("claim must remain when a Git registration path cannot be resolved: %v", err)
+	}
+}
+
+func worktreeListContainsPathForTest(t *testing.T, output, wantedPath string) bool {
+	t.Helper()
+	contains, err := worktreeListContainsPath(output, wantedPath)
+	if err != nil {
+		t.Fatalf("worktree path comparison failed: %v", err)
+	}
+	return contains
 }
 
 func TestForcedRemovalFallbackFailuresPreserveClaim(t *testing.T) {

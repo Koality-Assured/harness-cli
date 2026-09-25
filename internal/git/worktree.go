@@ -174,7 +174,11 @@ func removeWorktreeWithOps(primaryRoot, slug string, force, dryRun bool, ops wor
 		if err != nil {
 			return fmt.Errorf("could not inspect Git worktree registrations: %w", err)
 		}
-		if worktreeListContainsPath(registrations, targetPath) {
+		targetRegistered, err := worktreeListContainsPath(registrations, targetPath)
+		if err != nil {
+			return fmt.Errorf("could not compare Git worktree registrations: %w", err)
+		}
+		if targetRegistered {
 			if _, err := ops.runGit(primaryRoot, "worktree", "remove", "--force", targetPath); err != nil {
 				// Git may have completed the removal while returning an error. Accept
 				// that only if the target path and registration are both gone.
@@ -206,29 +210,83 @@ func verifyWorktreeRemoved(primaryRoot, targetPath string, runGit func(cwd strin
 	if err != nil {
 		return fmt.Errorf("could not verify Git worktree removal: %w", err)
 	}
-	if worktreeListContainsPath(registrations, targetPath) {
+	targetRegistered, err := worktreeListContainsPath(registrations, targetPath)
+	if err != nil {
+		return fmt.Errorf("could not verify Git worktree path identity: %w", err)
+	}
+	if targetRegistered {
 		return fmt.Errorf("Git still registers worktree after removal: %s", targetPath)
 	}
 	return nil
 }
 
-func worktreeListContainsPath(output, wantedPath string) bool {
-	wanted := normalizedWorktreePath(wantedPath)
+func worktreeListContainsPath(output, wantedPath string) (bool, error) {
+	wanted, err := normalizedWorktreePath(wantedPath)
+	if err != nil {
+		return false, fmt.Errorf("could not normalize requested worktree path %q: %w", wantedPath, err)
+	}
 	for _, line := range strings.Split(output, "\n") {
 		path, ok := strings.CutPrefix(line, "worktree ")
-		if ok && sameWorktreePath(normalizedWorktreePath(path), wanted) {
-			return true
+		if !ok {
+			continue
+		}
+		path = strings.TrimSuffix(path, "\r")
+		registered, err := normalizedWorktreePath(path)
+		if err != nil {
+			return false, fmt.Errorf("could not normalize Git worktree path %q: %w", path, err)
+		}
+		if sameWorktreePath(registered, wanted) {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
-func normalizedWorktreePath(path string) string {
+func normalizedWorktreePath(path string) (string, error) {
 	abs, err := filepath.Abs(path)
-	if err == nil {
-		path = abs
+	if err != nil {
+		return "", fmt.Errorf("could not make path absolute: %w", err)
 	}
-	return filepath.Clean(path)
+	path = filepath.Clean(abs)
+
+	// Git can report a physical path while the caller supplied a symlinked
+	// spelling (for example, /private/var/... versus /var/... on macOS). The
+	// worktree itself may be missing, so resolve the nearest existing ancestor
+	// and append only genuinely missing components. Existing components that
+	// cannot be resolved (such as dangling symlinks) make identity uncertain.
+	current := path
+	var missingSuffix []string
+	for {
+		resolved, evalErr := filepath.EvalSymlinks(current)
+		if evalErr == nil {
+			if len(missingSuffix) > 0 {
+				info, statErr := os.Stat(resolved)
+				if statErr != nil {
+					return "", fmt.Errorf("could not inspect existing worktree path ancestor %q: %w", resolved, statErr)
+				}
+				if !info.IsDir() {
+					return "", fmt.Errorf("existing worktree path ancestor is not a directory: %s", resolved)
+				}
+			}
+			for i := len(missingSuffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missingSuffix[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+
+		if _, lstatErr := os.Lstat(current); lstatErr == nil {
+			return "", fmt.Errorf("existing path component cannot be resolved: %q: %w", current, evalErr)
+		} else if !os.IsNotExist(lstatErr) {
+			return "", fmt.Errorf("could not inspect path component %q: %w", current, lstatErr)
+		}
+
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("could not resolve worktree path %q: %w", path, evalErr)
+		}
+		missingSuffix = append(missingSuffix, filepath.Base(current))
+		current = parent
+	}
 }
 
 func sameWorktreePath(a, b string) bool {
