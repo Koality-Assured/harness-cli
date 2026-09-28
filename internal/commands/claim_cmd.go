@@ -64,19 +64,14 @@ var claimInspectCmd = &cobra.Command{
 				targets = append(targets, e.HarnessRecord)
 			}
 		} else if HarnessArg != "" {
-			targetDir, err := registry.ResolveHarnessRoot(HarnessArg, "")
-			if err != nil {
+			if _, err := registry.ResolveHarnessRoot(HarnessArg, ""); err != nil {
 				return err
 			}
 			hRec, found := reg.GetHarness(HarnessArg)
-			if found {
-				targets = append(targets, *hRec)
-			} else {
-				targets = append(targets, registry.HarnessRecord{
-					ID:   "target",
-					Path: targetDir,
-				})
+			if !found {
+				return fmt.Errorf("harness '%s' is not registered in the catalog", HarnessArg)
 			}
+			targets = append(targets, *hRec)
 		} else {
 			// Use current or active harness
 			targetDir, err := registry.ResolveHarnessRoot("", "")
