@@ -15,13 +15,11 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Inspect git branch, cleanliness, and active worktree claims",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var targetDir string
-		if HarnessArg != "" {
-			var err error
-			targetDir, err = registry.ResolveHarnessRoot(HarnessArg, "")
-			if err != nil {
-				return err
-			}
+		// Always resolve via registry: active harness when --harness is omitted,
+		// otherwise the explicit --harness target. Matches claim inspect context.
+		targetDir, err := registry.ResolveHarnessRoot(HarnessArg, "")
+		if err != nil {
+			return err
 		}
 
 		primaryRoot, err := git.GetPrimaryRepoRoot(targetDir)
@@ -35,10 +33,24 @@ var statusCmd = &cobra.Command{
 
 		currentBranch := git.GetCurrentBranch(checkoutRoot)
 		dirtyLines, isClean := git.GetStatusPorcelain(checkoutRoot)
+		if dirtyLines == nil {
+			dirtyLines = []string{}
+		}
 		claims := git.LoadClaims(primaryRoot)
+		if claims == nil {
+			claims = []git.Claim{}
+		}
 
 		reg := registry.GetRegistry()
 		activeHarness, hasActive := reg.GetActiveHarness()
+
+		scopedViaHarnessFlag := HarnessArg != ""
+		scopeNote := ""
+		if scopedViaHarnessFlag && hasActive && activeHarness != nil {
+			if !samePath(activeHarness.Path, primaryRoot) {
+				scopeNote = "--harness scopes git and claims reporting below; active_harness remains the global registry selection"
+			}
+		}
 
 		if JSONOutput {
 			payload := map[string]interface{}{
@@ -52,6 +64,13 @@ var statusCmd = &cobra.Command{
 			if hasActive && activeHarness != nil {
 				payload["active_harness"] = activeHarness
 			}
+			if scopedViaHarnessFlag {
+				payload["status_scope"] = map[string]interface{}{
+					"harness_arg": HarnessArg,
+					"path":        primaryRoot,
+					"note":        "git and claims fields describe this path; active_harness is unchanged by --harness",
+				}
+			}
 			data, err := json.MarshalIndent(payload, "", "  ")
 			if err != nil {
 				return err
@@ -61,9 +80,20 @@ var statusCmd = &cobra.Command{
 		}
 
 		repoTitle := filepath.Base(primaryRoot)
+		if scopedRec, ok := reg.GetHarness(HarnessArg); ok && scopedViaHarnessFlag {
+			repoTitle = scopedRec.ID
+		} else if !scopedViaHarnessFlag && hasActive && activeHarness != nil {
+			repoTitle = activeHarness.ID
+		}
 		fmt.Printf("=== %s Harness Status ===\n", repoTitle)
 		if hasActive && activeHarness != nil {
 			fmt.Printf("Active Harness: %s (%s)\n", activeHarness.ID, activeHarness.Path)
+		}
+		if scopedViaHarnessFlag {
+			fmt.Printf("Status Scope:   %s (%s) [--harness]\n", repoTitle, primaryRoot)
+			if scopeNote != "" {
+				fmt.Printf("Note:           %s\n", scopeNote)
+			}
 		}
 		fmt.Printf("Primary Root:   %s\n", primaryRoot)
 		fmt.Printf("Checkout Root:  %s\n", checkoutRoot)
@@ -103,4 +133,13 @@ var statusCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+func samePath(a, b string) bool {
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	if errA != nil || errB != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	return filepath.Clean(absA) == filepath.Clean(absB)
 }

@@ -191,3 +191,33 @@ func TestChatRequiresOpenAIAndGeminiModelsBeforeCreatingSession(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionsSearchEmptyJSONMatchesArray(t *testing.T) {
+	stateDB := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("HARNESS_STATE_DB", stateDB)
+
+	store, err := chat.OpenSessionStore(stateDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	JSONOutput = true
+	t.Cleanup(func() { JSONOutput = false })
+
+	var output strings.Builder
+	command := &cobra.Command{Use: "sessions-search-test"}
+	command.SetOut(&output)
+	if err := runSessionAction(command, "search", []string{"nonexistent-token-xyz"}); err != nil {
+		t.Fatal(err)
+	}
+	trimmed := strings.TrimSpace(output.String())
+	if !strings.Contains(trimmed, `"matches"`) || strings.Contains(trimmed, `"matches": null`) {
+		t.Fatalf("expected empty matches array, got %s", trimmed)
+	}
+	if !strings.Contains(trimmed, `"matches": []`) && !strings.Contains(trimmed, `"matches":[]`) {
+		t.Fatalf("expected matches to serialize as [], got %s", trimmed)
+	}
+}
