@@ -13,6 +13,7 @@ var listCmd = &cobra.Command{
 	Use:     "list",
 	Aliases: []string{"ls"},
 	Short:   "List all registered domain harnesses",
+	Args:    cobra.NoArgs,
 	RunE:    runList,
 }
 
