@@ -15,13 +15,11 @@ var agentCmd = &cobra.Command{
 	Short: "Inspect available agents or view detailed agent spec",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var targetDir string
-		if HarnessArg != "" {
-			var err error
-			targetDir, err = registry.ResolveHarnessRoot(HarnessArg, "")
-			if err != nil {
-				return err
-			}
+		// ResolveHarnessRoot uses --harness when set; otherwise the active
+		// harness (same control-plane context status advertises), then cwd.
+		targetDir, err := registry.ResolveHarnessRoot(HarnessArg, "")
+		if err != nil {
+			return err
 		}
 
 		primaryRoot, err := git.GetPrimaryRepoRoot(targetDir)
