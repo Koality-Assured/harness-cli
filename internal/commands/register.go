@@ -20,6 +20,22 @@ var registerCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		targetPath := args[0]
+
+		if DryRun {
+			fmt.Printf("[dry-run] Would register harness at '%s'", targetPath)
+			if regName != "" {
+				fmt.Printf(" (name=%s)", regName)
+			}
+			if regDomain != "" {
+				fmt.Printf(" (domain=%s)", regDomain)
+			}
+			if regActive {
+				fmt.Print(" as active")
+			}
+			fmt.Println()
+			return nil
+		}
+
 		reg := registry.GetRegistry()
 
 		record, err := reg.Register(targetPath, regName, regDomain, regActive, Force)
