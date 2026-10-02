@@ -23,6 +23,7 @@ type AgentRecord struct {
 }
 
 // ResolveHarnessRoot resolves the target directory for harness commands based on --harness flag or active registry.
+// When harnessArg is set, the target must already be registered in the catalog (fail closed).
 func ResolveHarnessRoot(harnessArg, fallbackCwd string) (string, error) {
 	reg := GetRegistry()
 
@@ -30,14 +31,7 @@ func ResolveHarnessRoot(harnessArg, fallbackCwd string) (string, error) {
 		if rec, ok := reg.GetHarness(harnessArg); ok {
 			return rec.Path, nil
 		}
-		// Check if direct directory path
-		abs, err := filepath.Abs(harnessArg)
-		if err == nil {
-			if fi, err := os.Stat(abs); err == nil && fi.IsDir() {
-				return abs, nil
-			}
-		}
-		return "", fmt.Errorf("target harness '%s' is not registered and does not exist as a directory", harnessArg)
+		return "", fmt.Errorf("harness '%s' is not registered in the catalog", harnessArg)
 	}
 
 	if active, ok := reg.GetActiveHarness(); ok {
