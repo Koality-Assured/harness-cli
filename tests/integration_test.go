@@ -22,11 +22,33 @@ func getBinaryPath(t *testing.T) string {
 	return tmpBin
 }
 
+func newIntegrationRepo(t *testing.T) string {
+	t.Helper()
+	repoRoot := t.TempDir()
+	cmd := exec.Command("git", "init", "-b", "main")
+	cmd.Dir = repoRoot
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("failed to initialize isolated integration repo: %s (%v)", string(out), err)
+	}
+	return repoRoot
+}
+
 func TestCLIIntegrationSubcommands(t *testing.T) {
 	binaryPath := getBinaryPath(t)
+	repoRoot := newIntegrationRepo(t)
+	t.Setenv("HARNESS_CONFIG_PATH", filepath.Join(t.TempDir(), "config.json"))
+	t.Setenv("HARNESS_VAULT_PATH", filepath.Join(t.TempDir(), "credentials.enc"))
+	t.Setenv("HARNESS_FORCE_FILE_VAULT", "1")
+	t.Setenv("HARNESS_KEYRING_SERVICE", "harness-cli-integration-test")
+	t.Setenv("HARNESS_VAULT_PASSPHRASE", "fake-integration-passphrase")
+	command := func(args ...string) *exec.Cmd {
+		cmd := exec.Command(binaryPath, args...)
+		cmd.Dir = repoRoot
+		return cmd
+	}
 
 	// 1. Test status --json
-	cmd := exec.Command(binaryPath, "status", "--json")
+	cmd := command("status", "--json")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
@@ -46,7 +68,7 @@ func TestCLIIntegrationSubcommands(t *testing.T) {
 
 	// 2. Test list --json
 	stdout.Reset()
-	cmd = exec.Command(binaryPath, "list", "--json")
+	cmd = command("list", "--json")
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("list --json failed: %v", err)
@@ -66,7 +88,7 @@ func TestCLIIntegrationSubcommands(t *testing.T) {
 
 	// 3. Test auth status --json
 	stdout.Reset()
-	cmd = exec.Command(binaryPath, "auth", "status", "--json")
+	cmd = command("auth", "status", "--json")
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("auth status --json failed: %v", err)
@@ -86,7 +108,7 @@ func TestCLIIntegrationSubcommands(t *testing.T) {
 
 	// 4. Test claim inspect --json
 	stdout.Reset()
-	cmd = exec.Command(binaryPath, "claim", "inspect", "--json")
+	cmd = command("claim", "inspect", "--json")
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("claim inspect --json failed: %v", err)
@@ -102,7 +124,7 @@ func TestCLIIntegrationSubcommands(t *testing.T) {
 
 	// 5. Test clean --dry-run
 	stdout.Reset()
-	cmd = exec.Command(binaryPath, "clean", "--stale-hours", "24", "--dry-run")
+	cmd = command("clean", "--stale-hours", "24", "--dry-run")
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("clean --stale-hours --dry-run failed: %v", err)
