@@ -579,6 +579,9 @@ func runSessionAction(cmd *cobra.Command, action string, args []string) error {
 		if err != nil {
 			return err
 		}
+		if rows == nil {
+			rows = []chat.Message{}
+		}
 		if JSONOutput {
 			return writeJSON(cmd.OutOrStdout(), map[string]any{"matches": rows})
 		}
