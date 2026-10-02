@@ -2,12 +2,24 @@ version: 2
 
 project_name: harness
 
+# Builds must track ./cmd/harness so release artifacts include the same command
+# surface as `go run ./cmd/harness` (commands, sessions, chat, …). Embed
+# version/commit/date so binaries are distinguishable from stale local builds
+# that still report "commit: none, built: unknown".
+before:
+  hooks:
+    - go mod tidy
+    # Resolve main package so releases track ./cmd/harness (commands/sessions parity).
+    - go list ./cmd/harness
+
 builds:
   - id: harness
     main: ./cmd/harness
     binary: harness
     env:
       - CGO_ENABLED=0
+    flags:
+      - -trimpath
     goos:
       - linux
       - darwin
@@ -59,6 +71,8 @@ brews:
       bin.install "harness"
     test: |
       assert_match "Unified Harness CLI Control Plane", shell_output("#{bin}/harness --help")
+      assert_match "commands", shell_output("#{bin}/harness --help")
+      assert_match "sessions", shell_output("#{bin}/harness --help")
 
 scoops:
   - name: harness
