@@ -141,6 +141,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS messages (
  id TEXT PRIMARY KEY,
  session_id TEXT NOT NULL,
+ message_order INTEGER NOT NULL DEFAULT 0,
  role TEXT NOT NULL,
  content TEXT NOT NULL,
  input_tokens INTEGER,
@@ -164,8 +165,10 @@ CREATE TABLE IF NOT EXISTS adapter_sessions (
 	if err != nil {
 		return fmt.Errorf("initialize session schema: %w", err)
 	}
+	messageOrderAdded := false
 	for _, migration := range []struct{ table, column, declaration string }{
 		{"sessions", "busy_mode", "TEXT NOT NULL DEFAULT 'interrupt'"},
+		{"messages", "message_order", "INTEGER NOT NULL DEFAULT 0"},
 		{"messages", "input_tokens", "INTEGER"},
 		{"messages", "output_tokens", "INTEGER"},
 		{"messages", "provider_data", "TEXT"},
@@ -178,7 +181,18 @@ CREATE TABLE IF NOT EXISTS adapter_sessions (
 			if _, err := conn.ExecContext(ctx, "ALTER TABLE "+migration.table+" ADD COLUMN "+migration.column+" "+migration.declaration); err != nil {
 				return fmt.Errorf("migrate session schema: %w", err)
 			}
+			if migration.table == "messages" && migration.column == "message_order" {
+				messageOrderAdded = true
+			}
 		}
+	}
+	if messageOrderAdded {
+		if _, err := conn.ExecContext(ctx, "UPDATE messages SET message_order = rowid"); err != nil {
+			return fmt.Errorf("backfill message order: %w", err)
+		}
+	}
+	if _, err := conn.ExecContext(ctx, "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_session_order ON messages(session_id, message_order)"); err != nil {
+		return fmt.Errorf("index message order: %w", err)
 	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("commit session schema migration: %w", err)
@@ -330,8 +344,8 @@ func insertMessage(executor messageInserter, sessionID string, message Message) 
 		raw = string(rawBytes)
 	}
 	message.SessionID, message.CreatedAt = sessionID, timestamp()
-	_, err = executor.Exec(`INSERT INTO messages (id,session_id,role,content,input_tokens,output_tokens,provider_data,created_at)
-VALUES (?,?,?,?,?,?,?,?)`, message.ID, sessionID, message.Role, message.Content, message.InputTokens, message.OutputTokens, raw, message.CreatedAt)
+	_, err = executor.Exec(`INSERT INTO messages (id,session_id,message_order,role,content,input_tokens,output_tokens,provider_data,created_at)
+VALUES (?,?,(SELECT COALESCE(MAX(message_order),0)+1 FROM messages WHERE session_id=?),?,?,?,?,?,?)`, message.ID, sessionID, sessionID, message.Role, message.Content, message.InputTokens, message.OutputTokens, raw, message.CreatedAt)
 	return message, err
 }
 
@@ -386,8 +400,10 @@ func (s *SessionStore) GetSession(id string) (*Session, error) {
 }
 
 func (s *SessionStore) ListMessages(sessionID string) ([]Message, error) {
+	// Conversation order follows insertion sequence. Wall-clock timestamps can move backward
+	// when the system clock is adjusted and are display metadata, not an ordering key.
 	rows, err := s.db.Query(`SELECT id,session_id,role,content,input_tokens,output_tokens,provider_data,created_at
-FROM messages WHERE session_id=? ORDER BY created_at ASC, rowid ASC`, sessionID)
+FROM messages WHERE session_id=? ORDER BY message_order ASC`, sessionID)
 	if err != nil {
 		return nil, err
 	}

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Koality-Assured/harness-cli/internal/auth"
+	"github.com/Koality-Assured/harness-cli/internal/registry"
 )
 
 func withExecGlobals(t *testing.T, dryRun, force bool, harness string) func() {
@@ -154,7 +155,12 @@ func TestExecHarnessArgResolvesWorkDir(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	defer withExecGlobals(t, true, false, tmpDir)()
+	t.Setenv("HARNESS_CONFIG_PATH", filepath.Join(t.TempDir(), "config.json"))
+	record, err := registry.GetRegistry().Register(tmpDir, "exec-test", "", false, true)
+	if err != nil {
+		t.Fatalf("register test harness: %v", err)
+	}
+	defer withExecGlobals(t, true, false, record.ID)()
 	getExecVault = func() *auth.UniversalVault { return emptyTestVault(t) }
 
 	out, runErr := captureStdout(t, func() error {

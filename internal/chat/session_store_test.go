@@ -98,6 +98,39 @@ func TestSessionStoreCRUDAndNativeData(t *testing.T) {
 	}
 }
 
+func TestListMessagesPreservesAppendOrderWhenClockMovesBackward(t *testing.T) {
+	store := openTestStore(t)
+	session, err := store.CreateSession(Session{Title: "clock rollback"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.AppendMessage(session.ID, Message{Role: "user", Content: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.AppendMessage(session.ID, Message{Role: "assistant", Content: "second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Model an OS clock adjustment between appends: the second event receives an
+	// earlier wall-clock timestamp, but it must remain second in conversation history.
+	if _, err := store.db.Exec("UPDATE messages SET created_at = ? WHERE id = ?", "2026-09-28T16:25:22.181405Z", first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("UPDATE messages SET created_at = ? WHERE id = ?", "2026-09-28T16:25:22.180972Z", second.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	messages, err := store.ListMessages(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[0].Content != "first" || messages[1].Content != "second" {
+		t.Fatalf("ListMessages order = %#v; want append order [first, second]", messages)
+	}
+}
+
 func TestCreateSessionWithMessagesIsAtomic(t *testing.T) {
 	store := openTestStore(t)
 	_, err := store.CreateSessionWithMessages(Session{ID: "transaction-check"}, []Message{{
@@ -142,7 +175,7 @@ func TestSessionStoreMigratesSlice8Schema(t *testing.T) {
 		t.Fatalf("legacy session migration = %#v, %v", session, err)
 	}
 	messages, err := store.ListMessages("legacy")
-	if err != nil || len(messages) != 1 || messages[0].InputTokens != nil {
+	if err != nil || len(messages) != 2 || messages[0].Content != "first legacy message" || messages[1].Content != "second legacy message" || messages[0].InputTokens != nil {
 		t.Fatalf("legacy messages migration = %#v, %v", messages, err)
 	}
 }
@@ -211,7 +244,9 @@ id TEXT PRIMARY KEY,session_id TEXT NOT NULL,role TEXT NOT NULL,content TEXT NOT
 FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 INSERT INTO sessions (id,title,cwd,provider,model,created_at,updated_at) VALUES ('legacy','','','anthropic','claude-test','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');
-INSERT INTO messages (id,session_id,role,content,created_at) VALUES ('legacy-message','legacy','user','saved text','2026-01-01T00:00:01Z');`)
+INSERT INTO messages (id,session_id,role,content,created_at) VALUES
+ ('legacy-first','legacy','user','first legacy message','2026-01-01T00:00:02Z'),
+ ('legacy-second','legacy','assistant','second legacy message','2026-01-01T00:00:01Z');`)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
