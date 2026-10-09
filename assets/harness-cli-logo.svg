@@ -1,0 +1,212 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%" role="img" aria-label="Harness CLI Logo">
+  <defs>
+    <!-- Background Radial Glow -->
+    <radialGradient id="bgGradient" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#0E1726" />
+      <stop offset="60%" stop-color="#080C14" />
+      <stop offset="100%" stop-color="#030508" />
+    </radialGradient>
+
+    <!-- Ambient Core Glow -->
+    <radialGradient id="coreAmbient" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.32" />
+      <stop offset="45%" stop-color="#00ADD8" stop-opacity="0.18" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Electric Cyan to Go Gopher Blue Linear Gradient -->
+    <linearGradient id="cyanToGoBlue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF" />
+      <stop offset="50%" stop-color="#00C4EF" />
+      <stop offset="100%" stop-color="#00ADD8" />
+    </linearGradient>
+
+    <!-- Speed Lightning Bolt Gradient -->
+    <linearGradient id="boltGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="25%" stop-color="#E0F7FF" />
+      <stop offset="65%" stop-color="#00F0FF" />
+      <stop offset="100%" stop-color="#0088CC" />
+    </linearGradient>
+
+    <!-- Gear & Harness Ring Metallic Slate Gradient -->
+    <linearGradient id="gearSlate" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#334155" />
+      <stop offset="50%" stop-color="#1E293B" />
+      <stop offset="100%" stop-color="#0F172A" />
+    </linearGradient>
+
+    <!-- Glowing Rim Gradient -->
+    <linearGradient id="rimGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.9" />
+      <stop offset="50%" stop-color="#00ADD8" stop-opacity="0.6" />
+      <stop offset="100%" stop-color="#38BDF8" stop-opacity="0.2" />
+    </linearGradient>
+
+    <!-- Chevron Neon Gradient -->
+    <linearGradient id="chevronGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="35%" stop-color="#67E8F9" />
+      <stop offset="100%" stop-color="#00ADD8" />
+    </linearGradient>
+
+    <!-- Deep Drop Shadows & Neon Glow Filters -->
+    <filter id="neonGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="blur1" />
+      <feGaussianBlur stdDeviation="16" result="blur2" />
+      <feMerge>
+        <feMergeNode in="blur2" />
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="subtleGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="shadowDepth" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.75" />
+    </filter>
+  </defs>
+
+  <!-- Base Squircle Canvas -->
+  <rect x="8" y="8" width="496" height="496" rx="108" ry="108" fill="url(#bgGradient)" stroke="#1E293B" stroke-width="2.5" filter="url(#shadowDepth)" />
+
+  <!-- Inner Cyber Rim Accent -->
+  <rect x="14" y="14" width="484" height="484" rx="102" ry="102" fill="none" stroke="url(#rimGlow)" stroke-width="1.5" stroke-opacity="0.4" />
+
+  <!-- Ambient Core Light -->
+  <circle cx="256" cy="256" r="220" fill="url(#coreAmbient)" />
+
+  <!-- Background Tech Grid / Dot Coordinates -->
+  <g opacity="0.15" stroke="#00F0FF" stroke-width="1">
+    <line x1="80" y1="256" x2="432" y2="256" stroke-dasharray="4,8" />
+    <line x1="256" y1="80" x2="256" y2="432" stroke-dasharray="4,8" />
+    <circle cx="256" cy="256" r="190" fill="none" stroke-dasharray="3,9" />
+    <circle cx="256" cy="256" r="130" fill="none" stroke-dasharray="2,6" />
+  </g>
+
+  <!-- ========================================== -->
+  <!-- 1. INTERLOCKING HARNESS GEAR & CONTROL RING -->
+  <!-- ========================================== -->
+  <g id="harness-gear" filter="url(#shadowDepth)">
+    <!-- Outer Gear Body (8 Interlocking Teeth) -->
+    <path d="
+      M 238,62 L 274,62 L 278,92 A 166,166 0 0,1 328,113 L 355,98 L 380,123 L 366,151 A 166,166 0 0,1 387,201 L 418,206 L 418,242 L 418,270 L 387,275 A 166,166 0 0,1 366,325 L 380,353 L 355,378 L 328,363 A 166,166 0 0,1 278,384 L 274,414 L 238,414 L 234,384 A 166,166 0 0,1 184,363 L 157,378 L 132,353 L 146,325 A 166,166 0 0,1 125,275 L 94,270 L 94,206 L 125,201 A 166,166 0 0,1 146,151 L 132,123 L 157,98 L 184,113 A 166,166 0 0,1 234,92 Z
+    " fill="url(#gearSlate)" stroke="#334155" stroke-width="2" />
+
+    <!-- Gear Teeth Edge Chamfers / Highlights -->
+    <circle cx="256" cy="256" r="162" fill="none" stroke="url(#cyanToGoBlue)" stroke-width="2" stroke-opacity="0.7" />
+    <circle cx="256" cy="256" r="142" fill="#0B111E" stroke="#1E293B" stroke-width="3" />
+
+    <!-- Cyan Pulse Segments on Ring -->
+    <path d="M 256,114 A 142,142 0 0,1 398,256" fill="none" stroke="url(#cyanToGoBlue)" stroke-width="4.5" stroke-linecap="round" filter="url(#subtleGlow)" />
+    <path d="M 256,398 A 142,142 0 0,1 114,256" fill="none" stroke="#00ADD8" stroke-width="3" stroke-linecap="round" opacity="0.6" />
+
+    <!-- Control Plane Nodes / Bus Markers -->
+    <circle cx="256" cy="114" r="5" fill="#00F0FF" filter="url(#neonGlow)" />
+    <circle cx="398" cy="256" r="5" fill="#00F0FF" filter="url(#neonGlow)" />
+    <circle cx="256" cy="398" r="4" fill="#00ADD8" />
+    <circle cx="114" cy="256" r="4" fill="#00ADD8" />
+  </g>
+
+  <!-- ========================================== -->
+  <!-- 2. INNER TERMINAL CONTROL CHAMBER         -->
+  <!-- ========================================== -->
+  <circle cx="256" cy="256" r="126" fill="#080D17" stroke="#1E293B" stroke-width="1.5" />
+  <circle cx="256" cy="256" r="124" fill="url(#coreAmbient)" />
+
+  <!-- Terminal Slate Scanline Shading -->
+  <g opacity="0.08" stroke="#FFFFFF" stroke-width="1">
+    <line x1="140" y1="180" x2="372" y2="180" />
+    <line x1="140" y1="200" x2="372" y2="200" />
+    <line x1="140" y1="220" x2="372" y2="220" />
+    <line x1="140" y1="240" x2="372" y2="240" />
+    <line x1="140" y1="260" x2="372" y2="260" />
+    <line x1="140" y1="280" x2="372" y2="280" />
+    <line x1="140" y1="300" x2="372" y2="300" />
+    <line x1="140" y1="320" x2="372" y2="320" />
+  </g>
+
+  <!-- ========================================== -->
+  <!-- 3. TERMINAL CLI CHEVRON ( > )              -->
+  <!-- ========================================== -->
+  <g id="cli-chevron" filter="url(#neonGlow)">
+    <!-- Bold High-Tech Terminal Chevron '> ' -->
+    <path d="
+      M 166,178 
+      L 228,236 
+      A 28,28 0 0,1 228,276 
+      L 166,334 
+      L 194,360 
+      L 262,296 
+      A 40,40 0 0,0 262,216 
+      L 194,152 
+      Z
+    " fill="url(#chevronGrad)" />
+
+    <!-- Chevron Edge Glow Highlight -->
+    <path d="
+      M 194,152 
+      L 262,216 
+      A 40,40 0 0,1 262,296 
+      L 194,360
+    " fill="none" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" opacity="0.85" />
+  </g>
+
+  <!-- ========================================== -->
+  <!-- 4. TERMINAL PROMPT CURSOR ( _ )           -->
+  <!-- ========================================== -->
+  <g id="cli-cursor" filter="url(#neonGlow)">
+    <rect x="278" y="322" width="62" height="18" rx="5" ry="5" fill="#00F0FF" />
+    <rect x="280" y="324" width="58" height="14" rx="3" ry="3" fill="#E0F7FF" opacity="0.6" />
+  </g>
+
+  <!-- ========================================== -->
+  <!-- 5. COMPILED BINARY SPEED LIGHTNING BOLT    -->
+  <!-- ========================================== -->
+  <!-- Dynamic Lightning Bolt Cutting Across Center with Sub-15ms Speed Vector -->
+  <g id="speed-lightning" filter="url(#neonGlow)">
+    <path d="
+      M 312,128 
+      L 254,232 
+      L 294,232 
+      L 230,348 
+      L 250,264 
+      L 214,264 
+      L 258,168 
+      L 282,168 
+      Z
+    " fill="url(#boltGradient)" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round" />
+
+    <!-- Pure White Central Energy Core Line -->
+    <path d="
+      M 304,138 
+      L 258,224 
+      M 288,242 
+      L 236,338
+    " stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" opacity="0.9" />
+  </g>
+
+  <!-- ========================================== -->
+  <!-- 6. CORNER TELEMETRY & STATUS BRACKETS      -->
+  <!-- ========================================== -->
+  <g stroke="#00F0FF" stroke-width="2" opacity="0.75" fill="none">
+    <!-- Top-Left Bracket -->
+    <path d="M 44,72 L 44,44 L 72,44" />
+    <!-- Top-Right Bracket -->
+    <path d="M 440,44 L 468,44 L 468,72" />
+    <!-- Bottom-Left Bracket -->
+    <path d="M 44,440 L 44,468 L 72,468" />
+    <!-- Bottom-Right Bracket -->
+    <path d="M 440,468 L 468,468 L 468,440" />
+  </g>
+
+  <!-- Monospace Micro-Badges -->
+  <text x="256" y="472" font-family="'JetBrains Mono', 'Fira Code', 'Consolas', monospace" font-size="12" font-weight="700" fill="#00F0FF" letter-spacing="4" text-anchor="middle" opacity="0.85">HARNESS // GO 1.22+</text>
+</svg>
