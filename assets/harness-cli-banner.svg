@@ -1,0 +1,258 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" width="100%" height="100%" role="img" aria-label="Harness CLI Banner">
+  <defs>
+    <!-- Background Radial Gradients -->
+    <radialGradient id="bannerBg" cx="30%" cy="50%" r="80%">
+      <stop offset="0%" stop-color="#0E1726" />
+      <stop offset="55%" stop-color="#080C14" />
+      <stop offset="100%" stop-color="#030509" />
+    </radialGradient>
+
+    <radialGradient id="ambientCyan" cx="18%" cy="50%" r="45%">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.22" />
+      <stop offset="60%" stop-color="#00ADD8" stop-opacity="0.08" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient id="ambientBlue" cx="80%" cy="30%" r="50%">
+      <stop offset="0%" stop-color="#00ADD8" stop-opacity="0.16" />
+      <stop offset="65%" stop-color="#0F172A" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Electric Cyan to Go Gopher Blue -->
+    <linearGradient id="cyanBlueGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF" />
+      <stop offset="60%" stop-color="#00ADD8" />
+      <stop offset="100%" stop-color="#0284C7" />
+    </linearGradient>
+
+    <!-- Title Glow Gradient -->
+    <linearGradient id="titleGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="45%" stop-color="#E0F7FF" />
+      <stop offset="85%" stop-color="#67E8F9" />
+      <stop offset="100%" stop-color="#00F0FF" />
+    </linearGradient>
+
+    <!-- Speed Bolt Gradient -->
+    <linearGradient id="boltGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="30%" stop-color="#E0F7FF" />
+      <stop offset="70%" stop-color="#00F0FF" />
+      <stop offset="100%" stop-color="#0088CC" />
+    </linearGradient>
+
+    <!-- Metallic Slate Gear Gradient -->
+    <linearGradient id="gearSlateGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#334155" />
+      <stop offset="50%" stop-color="#1E293B" />
+      <stop offset="100%" stop-color="#0F172A" />
+    </linearGradient>
+
+    <!-- Cyber Border Rim -->
+    <linearGradient id="bannerBorderGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.8" />
+      <stop offset="40%" stop-color="#00ADD8" stop-opacity="0.4" />
+      <stop offset="75%" stop-color="#1E293B" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#00F0FF" stop-opacity="0.6" />
+    </linearGradient>
+
+    <!-- Glowing Filters -->
+    <filter id="neonGlowBanner" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="5" result="blur1" />
+      <feGaussianBlur stdDeviation="12" result="blur2" />
+      <feMerge>
+        <feMergeNode in="blur2" />
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="subtleGlowBanner" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="cardShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="15" flood-color="#000000" flood-opacity="0.65" />
+    </filter>
+  </defs>
+
+  <!-- Banner Background Container -->
+  <rect x="6" y="6" width="1188" height="408" rx="24" fill="url(#bannerBg)" stroke="#1E293B" stroke-width="2" />
+  <rect x="8" y="8" width="1184" height="404" rx="22" fill="none" stroke="url(#bannerBorderGrad)" stroke-width="1.5" stroke-opacity="0.6" />
+
+  <!-- Ambient Glow Backdrops -->
+  <circle cx="210" cy="210" r="260" fill="url(#ambientCyan)" />
+  <circle cx="950" cy="140" r="300" fill="url(#ambientBlue)" />
+
+  <!-- Top Accent Laser Line -->
+  <path d="M 40,8 L 1160,8" stroke="url(#cyanBlueGrad)" stroke-width="2.5" stroke-linecap="round" filter="url(#subtleGlowBanner)" />
+
+  <!-- Background Decorative Grid Lines -->
+  <g opacity="0.1" stroke="#00F0FF" stroke-width="1">
+    <line x1="40" y1="90" x2="1160" y2="90" stroke-dasharray="6,12" />
+    <line x1="40" y1="210" x2="1160" y2="210" stroke-dasharray="6,12" />
+    <line x1="40" y1="330" x2="1160" y2="330" stroke-dasharray="6,12" />
+    <line x1="420" y1="30" x2="420" y2="390" stroke-dasharray="4,10" />
+    <line x1="780" y1="30" x2="780" y2="390" stroke-dasharray="4,10" />
+  </g>
+
+  <!-- ======================================================== -->
+  <!-- LEFT HERO SECTION: EMBLEM COMPOSITION (Centered at 210, 210) -->
+  <!-- ======================================================== -->
+  <g transform="translate(210, 210) scale(0.68) translate(-256, -256)" filter="url(#cardShadow)">
+    <!-- Squircle Backdrop Shield -->
+    <rect x="24" y="24" width="464" height="464" rx="96" fill="#0A0F1A" stroke="#1E293B" stroke-width="3" />
+    <rect x="32" y="32" width="448" height="448" rx="88" fill="none" stroke="url(#cyanBlueGrad)" stroke-width="1.5" stroke-opacity="0.4" />
+    <circle cx="256" cy="256" r="190" fill="none" stroke="#00F0FF" stroke-width="1" stroke-dasharray="4,8" opacity="0.25" />
+
+    <!-- 8-Lug Outer Gear Ring -->
+    <path d="
+      M 238,62 L 274,62 L 278,92 A 166,166 0 0,1 328,113 L 355,98 L 380,123 L 366,151 A 166,166 0 0,1 387,201 L 418,206 L 418,242 L 418,270 L 387,275 A 166,166 0 0,1 366,325 L 380,353 L 355,378 L 328,363 A 166,166 0 0,1 278,384 L 274,414 L 238,414 L 234,384 A 166,166 0 0,1 184,363 L 157,378 L 132,353 L 146,325 A 166,166 0 0,1 125,275 L 94,270 L 94,206 L 125,201 A 166,166 0 0,1 146,151 L 132,123 L 157,98 L 184,113 A 166,166 0 0,1 234,92 Z
+    " fill="url(#gearSlateGrad)" stroke="#334155" stroke-width="2" />
+
+    <circle cx="256" cy="256" r="162" fill="none" stroke="url(#cyanBlueGrad)" stroke-width="2" stroke-opacity="0.7" />
+    <circle cx="256" cy="256" r="142" fill="#080D18" stroke="#1E293B" stroke-width="3" />
+
+    <!-- Cyan Pulse Segments on Ring -->
+    <path d="M 256,114 A 142,142 0 0,1 398,256" fill="none" stroke="url(#cyanBlueGrad)" stroke-width="5" stroke-linecap="round" filter="url(#subtleGlowBanner)" />
+    <circle cx="256" cy="114" r="6" fill="#00F0FF" filter="url(#neonGlowBanner)" />
+    <circle cx="398" cy="256" r="6" fill="#00F0FF" filter="url(#neonGlowBanner)" />
+    <circle cx="256" cy="398" r="5" fill="#00ADD8" />
+    <circle cx="114" cy="256" r="5" fill="#00ADD8" />
+
+    <!-- Inner Terminal Chamber -->
+    <circle cx="256" cy="256" r="126" fill="#060911" stroke="#1E293B" stroke-width="1.5" />
+
+    <!-- Terminal CLI Chevron ( > ) -->
+    <g filter="url(#neonGlowBanner)">
+      <path d="
+        M 166,178 
+        L 228,236 
+        A 28,28 0 0,1 228,276 
+        L 166,334 
+        L 194,360 
+        L 262,296 
+        A 40,40 0 0,0 262,216 
+        L 194,152 
+        Z
+      " fill="url(#titleGrad)" />
+      <path d="M 194,152 L 262,216 A 40,40 0 0,1 262,296 L 194,360" fill="none" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" opacity="0.85" />
+    </g>
+
+    <!-- Terminal Cursor ( _ ) -->
+    <g filter="url(#neonGlowBanner)">
+      <rect x="278" y="322" width="62" height="18" rx="5" ry="5" fill="#00F0FF" />
+    </g>
+
+    <!-- Speed Lightning Bolt -->
+    <g filter="url(#neonGlowBanner)">
+      <path d="
+        M 312,128 
+        L 254,232 
+        L 294,232 
+        L 230,348 
+        L 250,264 
+        L 214,264 
+        L 258,168 
+        L 282,168 
+        Z
+      " fill="url(#boltGrad)" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round" />
+    </g>
+
+    <!-- Corner Brackets -->
+    <g stroke="#00F0FF" stroke-width="2.5" opacity="0.75" fill="none">
+      <path d="M 50,78 L 50,50 L 78,50" />
+      <path d="M 434,50 L 462,50 L 462,78" />
+      <path d="M 50,434 L 50,462 L 78,462" />
+      <path d="M 434,462 L 462,462 L 462,434" />
+    </g>
+  </g>
+
+  <!-- ======================================================== -->
+  <!-- RIGHT HERO SECTION: TYPOGRAPHY, TERMINAL & FEATURE SPECS -->
+  <!-- ======================================================== -->
+
+  <!-- 1. Eyebrow Tag -->
+  <g transform="translate(420, 56)">
+    <rect x="0" y="0" width="280" height="26" rx="6" fill="#00F0FF" fill-opacity="0.08" stroke="#00F0FF" stroke-width="1.2" stroke-opacity="0.4" />
+    <circle cx="14" cy="13" r="4" fill="#00F0FF" filter="url(#subtleGlowBanner)" />
+    <text x="26" y="17" font-family="'JetBrains Mono', 'Fira Code', 'Consolas', monospace" font-size="11" font-weight="700" fill="#00F0FF" letter-spacing="2">COMPILED GO CONTROL PLANE</text>
+  </g>
+
+  <!-- 2. Main Title -->
+  <text x="420" y="132" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="52" font-weight="900" fill="url(#titleGrad)" letter-spacing="1.5" filter="url(#subtleGlowBanner)">
+    HARNESS CLI
+  </text>
+
+  <!-- 3. Subtitle -->
+  <text x="422" y="165" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="500" fill="#94A3B8" letter-spacing="0.3">
+    High-Performance Native Orchestration for Autonomous Agents &amp; Domain Routers
+  </text>
+
+  <!-- 4. Terminal Command Box -->
+  <g transform="translate(420, 192)" filter="url(#cardShadow)">
+    <rect x="0" y="0" width="720" height="120" rx="12" fill="#0B111E" stroke="#1E293B" stroke-width="1.5" />
+
+    <!-- Terminal Header Bar -->
+    <path d="M 0,12 A 12,12 0 0,1 12,0 L 708,0 A 12,12 0 0,1 720,12 L 720,32 L 0,32 Z" fill="#0F172A" />
+    <line x1="0" y1="32" x2="720" y2="32" stroke="#1E293B" stroke-width="1" />
+
+    <!-- Window Dots -->
+    <circle cx="18" cy="16" r="5" fill="#EF4444" opacity="0.85" />
+    <circle cx="34" cy="16" r="5" fill="#F59E0B" opacity="0.85" />
+    <circle cx="50" cy="16" r="5" fill="#10B981" opacity="0.85" />
+    <text x="72" y="20" font-family="'JetBrains Mono', monospace" font-size="11" fill="#64748B">harness ~ control-plane (x86_64 / arm64)</text>
+
+    <!-- Terminal Prompt Line 1 -->
+    <text x="20" y="60" font-family="'JetBrains Mono', 'Fira Code', 'Consolas', monospace" font-size="13" font-weight="600" fill="#00F0FF">
+      <tspan fill="#64748B">$ </tspan>harness status <tspan fill="#38BDF8">--json</tspan>
+    </text>
+
+    <!-- Terminal Output Line 2 -->
+    <text x="20" y="84" font-family="'JetBrains Mono', 'Fira Code', 'Consolas', monospace" font-size="12" fill="#E2E8F0">
+      <tspan fill="#10B981">✓</tspan> active_harness: <tspan fill="#38BDF8">ai-router</tspan>  <tspan fill="#64748B">|</tspan>  tree: <tspan fill="#10B981">CLEAN</tspan>  <tspan fill="#64748B">|</tspan>  claims: <tspan fill="#00F0FF">0 lock contention</tspan>
+    </text>
+
+    <!-- Terminal Output Line 3 -->
+    <text x="20" y="104" font-family="'JetBrains Mono', 'Fira Code', 'Consolas', monospace" font-size="11" fill="#64748B">
+      latency: <tspan fill="#00F0FF">&lt;14.2ms</tspan>  •  vault: <tspan fill="#E2E8F0">OS Keyring (AES-256)</tspan>  •  runtime: <tspan fill="#00ADD8">Go 1.22+</tspan>
+    </text>
+  </g>
+
+  <!-- 5. Feature Pills / Capabilities -->
+  <g transform="translate(420, 332)">
+    <!-- Pill 1: Speed -->
+    <g transform="translate(0, 0)">
+      <rect x="0" y="0" width="128" height="30" rx="8" fill="#00F0FF" fill-opacity="0.08" stroke="#00F0FF" stroke-width="1.2" stroke-opacity="0.5" />
+      <text x="64" y="20" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="700" fill="#00F0FF" text-anchor="middle">⚡ &lt;15ms Boot</text>
+    </g>
+
+    <!-- Pill 2: Vault -->
+    <g transform="translate(138, 0)">
+      <rect x="0" y="0" width="138" height="30" rx="8" fill="#10B981" fill-opacity="0.08" stroke="#10B981" stroke-width="1.2" stroke-opacity="0.5" />
+      <text x="69" y="20" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="700" fill="#10B981" text-anchor="middle">🔒 Zero-Leak Vault</text>
+    </g>
+
+    <!-- Pill 3: Worktrees -->
+    <g transform="translate(286, 0)">
+      <rect x="0" y="0" width="144" height="30" rx="8" fill="#00ADD8" fill-opacity="0.08" stroke="#00ADD8" stroke-width="1.2" stroke-opacity="0.5" />
+      <text x="72" y="20" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="700" fill="#38BDF8" text-anchor="middle">🌿 Worktrees</text>
+    </g>
+
+    <!-- Pill 4: Bubble Tea TUI -->
+    <g transform="translate(440, 0)">
+      <rect x="0" y="0" width="132" height="30" rx="8" fill="#818CF8" fill-opacity="0.08" stroke="#818CF8" stroke-width="1.2" stroke-opacity="0.5" />
+      <text x="66" y="20" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="700" fill="#A5B4FC" text-anchor="middle">🎛️ Terminal TUI</text>
+    </g>
+
+    <!-- Pill 5: Spoke Sync -->
+    <g transform="translate(582, 0)">
+      <rect x="0" y="0" width="138" height="30" rx="8" fill="#00F0FF" fill-opacity="0.08" stroke="#00F0FF" stroke-width="1.2" stroke-opacity="0.5" />
+      <text x="69" y="20" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="700" fill="#00F0FF" text-anchor="middle">🔄 Spoke Sync</text>
+    </g>
+  </g>
+</svg>
