@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/big"
 	"regexp"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -480,44 +479,4 @@ func jsonValuesEqual(a, b any) bool {
 	default:
 		return fmt.Sprintf("%T:%v", a, a) == fmt.Sprintf("%T:%v", b, b)
 	}
-}
-
-func parseToolArguments(value any) (map[string]any, error) {
-	if raw, ok := value.(string); ok {
-		var decoded any
-		decoder := json.NewDecoder(strings.NewReader(raw))
-		decoder.UseNumber()
-		if err := decoder.Decode(&decoded); err != nil {
-			return nil, err
-		}
-		object, ok := decoded.(map[string]any)
-		if !ok {
-			return nil, errors.New("tool arguments must be a JSON object")
-		}
-		return object, nil
-	}
-	decoded, err := normalizeJSON(value)
-	if err != nil {
-		return nil, err
-	}
-	object, ok := decoded.(map[string]any)
-	if !ok {
-		return nil, errors.New("tool arguments must be a JSON object")
-	}
-	return object, nil
-}
-
-func validateToolArguments(value any, schema map[string]any) error {
-	arguments, err := parseToolArguments(value)
-	if err != nil {
-		return err
-	}
-	return validateValue(arguments, schema, "$")
-}
-
-func parseJSONNumber(text string) (json.Number, error) {
-	if _, err := strconv.ParseFloat(text, 64); err != nil {
-		return "", err
-	}
-	return json.Number(text), nil
 }

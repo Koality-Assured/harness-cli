@@ -303,7 +303,7 @@ func (s *SessionStore) CreateSessionWithMessages(session Session, messages []Mes
 	if err != nil {
 		return Session{}, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.Exec(`INSERT INTO sessions (id,title,cwd,provider,model,busy_mode,created_at,updated_at)
 VALUES (?,?,?,?,?,?,?,?)`, session.ID, session.Title, session.CWD, session.Provider, session.Model, session.BusyMode, now, now); err != nil {
 		return Session{}, err
@@ -368,7 +368,7 @@ func (s *SessionStore) AppendMessages(sessionID string, messages []Message) ([]M
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	inserted := make([]Message, 0, len(messages))
 	for _, message := range messages {
 		item, err := insertMessage(tx, sessionID, message)
@@ -576,7 +576,7 @@ func (s *SessionStore) BindAdapterSession(adapter, principal, route, externalID 
 	if err != nil {
 		return "", nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if initial.ID == "" {
 		initial.ID, err = newID()
 		if err != nil {

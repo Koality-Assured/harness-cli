@@ -28,10 +28,10 @@
 
 `harness` is a zero-dependency, compiled native binary (Go) engineered for high-performance orchestration of AI agent harnesses (`ai-router`, `ai-harness-core`, and specialized domain spokes). 
 
-It replaces interpreter and Python wrapper startup overhead with **sub-15ms cold startups**, guarantees mutual exclusion across concurrent agent worktrees through atomic claim locks, provides zero-leak credential storage via native OS keyrings, exposes an interactive Bubble Tea terminal switcher (TUI), and delivers stdio/HTTP protocol adapters including the Agent Communication Protocol (ACP) and an OpenAI-compatible completion gateway.
+It replaces interpreter and Python wrapper startup overhead with **~30ms cold startups on Windows (measured via scripts/benchmark_startup.py)**, guarantees mutual exclusion across concurrent agent worktrees through atomic claim locks, provides zero-leak credential storage via native OS keyrings, exposes an interactive Bubble Tea terminal switcher (TUI), and delivers stdio/HTTP protocol adapters including the Agent Communication Protocol (ACP) and an OpenAI-compatible completion gateway.
 
 ### Core Pillars
-- **Instantaneous Startup**: Cold startup latency under 15ms (benchmarked against Python interpreter cold starts of ~180–220ms).
+- **Rapid Startup**: Cold startup latency ~30ms on Windows (benchmarked against Python interpreter cold starts of ~180-220ms).
 - **Automated Worktree Isolation**: Enforces clean working trees, verifies area claim locks, and manages git worktrees via `harness branch`, `harness clean`, and `harness claim`.
 - **Zero-Leak Credential Vault**: Direct integration with OS keyrings (Windows Credential Manager, macOS Keychain, Linux Secret Service) with AES-256-GCM encrypted fallback for headless environments; secrets are injected strictly in-memory into child subprocesses.
 - **Protocol Adapters (ACP & Gateway)**: Stdio JSON-RPC ACP v1 adapter for agent-to-agent communication and a loopback HTTP OpenAI-compatible chat completion proxy.
@@ -54,7 +54,7 @@ flowchart TD
     end
 
     subgraph ControlPlane["Harness CLI Control Plane (Compiled Go Binary)"]
-        CLI["harness Core Dispatcher<br/>(&lt;15ms Cold Boot)"]
+        CLI["harness Core Dispatcher<br/>(~30ms Cold Boot)"]
         TUI["Bubble Tea TUI<br/>(Interactive Switcher)"]
         ChatEngine["Chat Loop &amp; Tool Engine<br/>(Anthropic / OpenAI / Gemini)"]
         ACPAdapter["ACP v1 JSON-RPC Adapter<br/>(stdio Agent Protocol)"]
