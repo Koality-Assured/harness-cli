@@ -105,19 +105,21 @@ func defaultData() registryData {
 
 func (r *HarnessRegistry) load() registryData {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 
 	if _, err := os.Stat(r.path); os.IsNotExist(err) {
+		r.mu.RUnlock()
 		return defaultData()
 	}
 
 	data, err := os.ReadFile(r.path)
 	if err != nil || len(strings.TrimSpace(string(data))) == 0 {
+		r.mu.RUnlock()
 		return defaultData()
 	}
 
 	var rd registryData
 	if err := json.Unmarshal(data, &rd); err != nil {
+		r.mu.RUnlock()
 		// Corrupted registry backup
 		ts := time.Now().UTC().Format("20060102_150405")
 		backupPath := fmt.Sprintf("%s.corrupted.%s", r.path, ts)
@@ -126,6 +128,7 @@ func (r *HarnessRegistry) load() registryData {
 		_ = r.save(fresh)
 		return fresh
 	}
+	r.mu.RUnlock()
 
 	if rd.Harnesses == nil {
 		rd.Harnesses = make(map[string]HarnessRecord)

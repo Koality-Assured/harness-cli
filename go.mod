@@ -1,6 +1,6 @@
 module github.com/Koality-Assured/harness-cli
 
-go 1.27.1
+go 1.26.0
 
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
