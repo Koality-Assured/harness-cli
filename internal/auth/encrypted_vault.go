@@ -193,6 +193,9 @@ func (ev *EncryptedFileVault) SetCredential(provider string, cred *Credential) e
 
 	data, err := ev.loadAll()
 	if err != nil {
+		if strings.Contains(err.Error(), "passphrase is incorrect") {
+			return err
+		}
 		// Corrupted recovery backup
 		_ = ev.recoverCorrupted()
 		data = make(map[string]Credential)

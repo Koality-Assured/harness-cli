@@ -70,7 +70,9 @@ func TestEncryptedFileVault_Basic(t *testing.T) {
 	// The problem statement says: "Wrong passphrase handling for encrypted vault."
 	// Let's check how SetCredential behaves with wrong passphrase.
 	err = evWrong.SetCredential("test_prov3", cred)
-	if err != nil {
-		t.Errorf("SetCredential with wrong passphrase should reset/recover, got err: %v", err)
+	if err == nil {
+		t.Errorf("SetCredential with wrong passphrase should return error, got nil")
+	} else if err.Error() != "authentication tag verification failed: vault ciphertext has been tampered with or passphrase is incorrect" {
+		t.Errorf("Unexpected error for SetCredential with wrong passphrase: %v", err)
 	}
 }
