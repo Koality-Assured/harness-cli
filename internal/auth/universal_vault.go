@@ -20,7 +20,6 @@ type UniversalVault struct {
 	keyringVault   *KeyringVault
 	fileVault      *EncryptedFileVault
 	forceFileVault bool
-	mu             sync.RWMutex
 }
 
 var (

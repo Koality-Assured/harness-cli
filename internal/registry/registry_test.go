@@ -35,7 +35,9 @@ func TestHarnessRegistry_Register_And_Get(t *testing.T) {
 	reg := NewHarnessRegistry(regPath)
 
 	repoPath := filepath.Join(tmpDir, "repo1")
-	os.Mkdir(repoPath, 0755)
+	if err := os.Mkdir(repoPath, 0755); err != nil {
+		t.Fatalf("failed to create repo dir: %v", err)
+	}
 
 	// Attempt to register empty dir without force
 	_, err := reg.Register(repoPath, "Repo 1", "test.com", true, false)
@@ -65,7 +67,9 @@ func TestHarnessRegistry_Register_And_Get(t *testing.T) {
 
 	// Register another repo to test collision resolution and ID generation
 	repoPath2 := filepath.Join(tmpDir, "repo-1")
-	os.Mkdir(repoPath2, 0755)
+	if err := os.Mkdir(repoPath2, 0755); err != nil {
+		t.Fatalf("failed to create repo2 dir: %v", err)
+	}
 	rec2, err := reg.Register(repoPath2, "", "test2.com", false, true)
 	if err != nil {
 		t.Fatalf("Failed to register: %v", err)
@@ -81,9 +85,13 @@ func TestHarnessRegistry_Switch_And_Deregister(t *testing.T) {
 	reg := NewHarnessRegistry(regPath)
 
 	repoPath1 := filepath.Join(tmpDir, "repo1")
-	os.Mkdir(repoPath1, 0755)
+	if err := os.Mkdir(repoPath1, 0755); err != nil {
+		t.Fatalf("failed to create repo1 dir: %v", err)
+	}
 	repoPath2 := filepath.Join(tmpDir, "repo2")
-	os.Mkdir(repoPath2, 0755)
+	if err := os.Mkdir(repoPath2, 0755); err != nil {
+		t.Fatalf("failed to create repo2 dir: %v", err)
+	}
 
 	rec1, _ := reg.Register(repoPath1, "Repo 1", "", true, true)
 	rec2, _ := reg.Register(repoPath2, "Repo 2", "", false, true)
@@ -150,8 +158,12 @@ func TestHarnessRegistry_ListHarnesses(t *testing.T) {
 	reg := NewHarnessRegistry(regPath)
 
 	repoPath1 := filepath.Join(tmpDir, "repo1")
-	os.Mkdir(repoPath1, 0755)
-	reg.Register(repoPath1, "Repo 1", "", true, true)
+	if err := os.Mkdir(repoPath1, 0755); err != nil {
+		t.Fatalf("failed to create repo1 dir: %v", err)
+	}
+	if _, err := reg.Register(repoPath1, "Repo 1", "", true, true); err != nil {
+		t.Fatalf("failed to register repo: %v", err)
+	}
 
 	list := reg.ListHarnesses()
 	if len(list) != 1 {

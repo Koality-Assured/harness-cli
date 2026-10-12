@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -29,10 +30,8 @@ func TestEncryptedFileVault_Basic(t *testing.T) {
 		t.Fatalf("Stat failed: %v", err)
 	}
 	
-	// On Windows, permissions might not be exactly 0600, but we can check if it exists and has some restrictions.
-	// Actually we should test that os.WriteFile creates it with 0600
-	if info.Mode().Perm()&0077 != 0 {
-		// Ignore on Windows if not perfectly 0600, but the test ensures it's enforced.
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+		t.Errorf("expected file mode 0600 or tighter, got %v", info.Mode().Perm())
 	}
 
 	// Test Nonce uniqueness

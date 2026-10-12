@@ -127,7 +127,6 @@ func LoadAgent(repoRoot, agentID string) (*AgentRecord, error) {
 				continue
 			}
 			if inFrontmatter {
-				inFrontmatter = false
 				bodyLines = lines[idx+1:]
 				break
 			}
