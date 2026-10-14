@@ -22,11 +22,15 @@ const (
 	AnthropicDefaultModel = "claude-sonnet-4-5"
 	AnthropicBaseURLEnv   = "HARNESS_ANTHROPIC_BASE_URL"
 	anthropicMessagesPath = "/v1/messages"
+	LocalBaseURLEnv       = "HARNESS_LOCAL_BASE_URL"
+	DefaultLocalBaseURL   = "http://127.0.0.1:11434/v1"
+	LocalDefaultModel     = "qwen2.5-coder:14b"
 )
 
 var providerAliases = map[string]string{
 	"claude": "anthropic", "anthropic": "anthropic", "cursor": "cursor",
 	"gemini": "gemini", "google": "gemini", "openai": "openai", "gpt": "openai",
+	"local": "local", "ollama": "local", "llamacpp": "local", "llama-server": "local",
 }
 
 // HTTPDoer makes provider requests replaceable with deterministic fake transports.
@@ -101,6 +105,9 @@ func resolveModel(provider, model string) (string, error) {
 	}
 	if provider == "anthropic" {
 		return AnthropicDefaultModel, nil
+	}
+	if provider == "local" {
+		return LocalDefaultModel, nil
 	}
 	return "", &ProviderError{Provider: provider, Message: provider + " requires --model"}
 }
@@ -222,6 +229,25 @@ func buildRequest(provider, model string, messages []Message, apiKey string, too
 		}
 		headers["authorization"] = "Bearer " + apiKey
 		return marshalRequest("https://api.openai.com/v1/chat/completions", headers, payload)
+	case "local":
+		payload = map[string]any{"model": model, "messages": messagesForOpenAI(messages)}
+		if stream {
+			payload["stream"] = true
+			payload["stream_options"] = map[string]any{"include_usage": true}
+		}
+		if definitions := openAITools(tools); len(definitions) > 0 {
+			payload["tools"] = definitions
+		}
+		token := apiKey
+		if token == "" {
+			token = "local"
+		}
+		headers["authorization"] = "Bearer " + token
+		endpoint, err := localChatCompletionsEndpoint()
+		if err != nil {
+			return "", nil, nil, err
+		}
+		return marshalRequest(endpoint, headers, payload)
 	case "gemini":
 		payload = map[string]any{"contents": geminiContents(messages)}
 		if system := systemFromMessages(messages); system != "" {
@@ -240,6 +266,22 @@ func buildRequest(provider, model string, messages []Message, apiKey string, too
 	default:
 		return "", nil, nil, fmt.Errorf("unsupported provider %q", provider)
 	}
+}
+
+func localChatCompletionsEndpoint() (string, error) {
+	base := strings.TrimSpace(os.Getenv(LocalBaseURLEnv))
+	if base == "" {
+		base = DefaultLocalBaseURL
+	}
+	parsed, err := url.Parse(base)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return "", &ProviderError{Provider: "local", Message: "invalid " + LocalBaseURLEnv + "; expected a loopback HTTP(S) origin (127.0.0.1, localhost, or ::1)"}
+	}
+	hostname := parsed.Hostname()
+	if hostname != "127.0.0.1" && hostname != "localhost" && hostname != "::1" {
+		return "", &ProviderError{Provider: "local", Message: "invalid " + LocalBaseURLEnv + "; expected a loopback HTTP(S) origin (127.0.0.1, localhost, or ::1)"}
+	}
+	return strings.TrimRight(base, "/") + "/chat/completions", nil
 }
 
 func anthropicMessagesEndpoint() (string, error) {
@@ -349,13 +391,13 @@ func messagesForOpenAI(messages []Message) []any {
 	var out []any
 	for _, message := range messages {
 		data := providerData(message)
-		if message.Role == "assistant" && data["provider"] == "openai" {
+		if message.Role == "assistant" && (data["provider"] == "openai" || data["provider"] == "local") {
 			if native, ok := data["message"].(map[string]any); ok && native["role"] == "assistant" {
 				out = append(out, native)
 				continue
 			}
 		}
-		if message.Role == "tool" && data["provider"] == "openai" {
+		if message.Role == "tool" && (data["provider"] == "openai" || data["provider"] == "local") {
 			if result, ok := data["tool_result"].(map[string]any); ok {
 				out = append(out, map[string]any{"role": "tool", "tool_call_id": valueOr(result["id"], ""), "content": valueOr(result["content"], message.Content)})
 				continue
@@ -465,7 +507,7 @@ func decodeCompletion(provider string, data map[string]any) (Completion, error) 
 		result.ProviderMessage = map[string]any{"role": "assistant", "content": blocks}
 		usage, _ := data["usage"].(map[string]any)
 		result.InputTokens, result.OutputTokens = tokenCount(usage["input_tokens"]), tokenCount(usage["output_tokens"])
-	case "openai":
+	case "openai", "local":
 		choices, _ := data["choices"].([]any)
 		if len(choices) > 0 {
 			choice, _ := choices[0].(map[string]any)
@@ -514,7 +556,7 @@ func decodeCompletion(provider string, data map[string]any) (Completion, error) 
 		usage, _ := data["usageMetadata"].(map[string]any)
 		result.InputTokens, result.OutputTokens = tokenCount(usage["promptTokenCount"]), tokenCount(usage["candidatesTokenCount"])
 	}
-	if provider == "anthropic" || provider == "openai" {
+	if provider == "anthropic" || provider == "openai" || provider == "local" {
 		for _, call := range result.ToolCalls {
 			if strings.TrimSpace(call.ID) == "" {
 				return Completion{}, &ProviderError{Provider: provider, Message: provider + " returned a tool call without a required call ID"}
@@ -645,7 +687,7 @@ func readStream(ctx context.Context, provider string, source io.Reader, apiKey s
 			}
 			return nil
 		}
-		if provider == "openai" {
+		if provider == "openai" || provider == "local" {
 			usage, _ := data["usage"].(map[string]any)
 			if value, exists := usage["prompt_tokens"]; exists {
 				inputTokens = tokenCount(value)
@@ -805,8 +847,8 @@ func readStream(ctx context.Context, provider string, source io.Reader, apiKey s
 			continue
 		}
 	}
-	if provider == "openai" && !streamDone {
-		return Completion{}, &ProviderError{Provider: provider, Message: "openai stream ended before [DONE]"}
+	if (provider == "openai" || provider == "local") && !streamDone {
+		return Completion{}, &ProviderError{Provider: provider, Message: provider + " stream ended before [DONE]"}
 	}
 
 	completion := Completion{Text: assembled.String(), InputTokens: inputTokens, OutputTokens: outputTokens}
@@ -836,7 +878,7 @@ func readStream(ctx context.Context, provider string, source io.Reader, apiKey s
 			blocks = append(blocks, block)
 		}
 		completion.ProviderMessage = map[string]any{"role": "assistant", "content": blocks}
-	case "openai":
+	case "openai", "local":
 		indices := sortedIntKeys(openAICalls)
 		nativeCalls := make([]any, 0, len(indices))
 		for _, index := range indices {

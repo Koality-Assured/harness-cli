@@ -14,16 +14,20 @@ import (
 )
 
 var ProviderAliases = map[string]string{
-	"claude":    "anthropic",
-	"anthropic": "anthropic",
-	"cursor":    "cursor",
-	"gemini":    "gemini",
-	"google":    "gemini",
-	"openai":    "openai",
-	"gpt":       "openai",
+	"claude":       "anthropic",
+	"anthropic":    "anthropic",
+	"cursor":       "cursor",
+	"gemini":       "gemini",
+	"google":       "gemini",
+	"openai":       "openai",
+	"gpt":          "openai",
+	"local":        "local",
+	"ollama":       "local",
+	"llamacpp":     "local",
+	"llama-server": "local",
 }
 
-var SupportedProviders = []string{"anthropic", "cursor", "gemini", "openai"}
+var SupportedProviders = []string{"anthropic", "cursor", "gemini", "openai", "local"}
 
 // NormalizeProvider maps user input or alias to canonical provider ID.
 func NormalizeProvider(input string) (string, bool) {

@@ -616,4 +616,39 @@ func (s *SessionStore) RebindAdapterSession(adapter, principal, route, externalI
 	return count == 1, err
 }
 
+// SetSystemPrompt sets, replaces, or clears the system prompt for a session.
+// It removes any existing messages with role 'system' and, if content is non-empty,
+// inserts a new system message.
+func (s *SessionStore) SetSystemPrompt(sessionID, content string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM messages WHERE session_id = ? AND role = 'system'`, sessionID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(content) != "" {
+		message := Message{Role: "system", Content: content}
+		if _, err := insertMessage(tx, sessionID, message); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetSystemPrompt retrieves the active system prompt content for a session, if any.
+func (s *SessionStore) GetSystemPrompt(sessionID string) (string, bool, error) {
+	row := s.db.QueryRow(`SELECT content FROM messages WHERE session_id = ? AND role = 'system' ORDER BY message_order DESC LIMIT 1`, sessionID)
+	var content string
+	err := row.Scan(&content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return content, true, nil
+}
+
 var _ io.Closer = (*SessionStore)(nil)
