@@ -47,6 +47,9 @@ var authLoginCmd = &cobra.Command{
 			return auth.LoginGemini(authNoBrowser, authDeviceCode, authAPIKey)
 		case "openai":
 			return auth.LoginOpenAI(authAPIKey, authNoBrowser, authDeviceCode)
+		case "local":
+			fmt.Fprintln(cmd.OutOrStdout(), "Notice: local model runtime executes on localhost without requiring vault API keys.")
+			return nil
 		default:
 			return fmt.Errorf("provider '%s' handler not implemented", prov)
 		}
@@ -72,6 +75,18 @@ var authStatusCmd = &cobra.Command{
 
 		var statuses []ProviderStatus
 		for _, p := range auth.SupportedProviders {
+			if p == "local" {
+				statuses = append(statuses, ProviderStatus{
+					Provider:      "local",
+					Authenticated: true,
+					Status:        "NO_KEY_REQUIRED",
+					Profile:       "Localhost (No Vault Key Required)",
+					Expires:       "Never (Local Runtime)",
+					TokenMasked:   "local",
+					TokenType:     "None",
+				})
+				continue
+			}
 			cred, err := vault.GetCredential(p)
 			if err == nil && cred != nil {
 				expired := auth.IsTokenExpired(cred.ExpiresAt, 60)

@@ -141,9 +141,6 @@ func TestChatOneShotMatchesPrototypeStreamingAndNonStreamingOutput(t *testing.T)
 				t.Fatal(err)
 			}
 			want := "fake answer\n"
-			if !testCase.noStream {
-				want = "fake answer\nfake answer\n"
-			}
 			if got := output.String(); got != want {
 				t.Fatalf("stdout = %q, want exactly %q (stderr %q)", got, want, errorOutput.String())
 			}

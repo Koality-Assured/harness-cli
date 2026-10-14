@@ -94,8 +94,8 @@ var claimInspectCmd = &cobra.Command{
 			threshold = 24.0
 		}
 
-		var reportItems []ClaimReportItem
-		var warnings []string
+		reportItems := []ClaimReportItem{}
+		warnings := []string{}
 		staleCount := 0
 
 		for _, h := range targets {

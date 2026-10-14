@@ -115,6 +115,150 @@ def test_auth_status_parity(py_cmd: list[str], go_cmd: list[str]) -> bool:
     return True
 
 
+def test_commands_parity(py_cmd: list[str], go_cmd: list[str]) -> bool:
+    print("\n--- Testing 'commands --json' Parity ---")
+    rc_py, out_py, err_py = run_cmd([*py_cmd, "commands", "--json"])
+    rc_go, out_go, err_go = run_cmd([*go_cmd, "commands", "--json"])
+
+    if rc_py != 0:
+        print(f"FAIL: Python CLI returned {rc_py}: {err_py}")
+        return False
+    if rc_go != 0:
+        print(f"FAIL: Go CLI returned {rc_go}: {err_go}")
+        return False
+
+    data_py = json.loads(out_py)
+    data_go = json.loads(out_go)
+
+    if "commands" not in data_go:
+        print("FAIL: Go commands output missing 'commands' list")
+        return False
+
+    py_cmds = [c.get("name") for c in data_py.get("commands", [])]
+    go_cmds = [c.get("name") for c in data_go.get("commands", [])]
+    print(f"Python commands ({len(py_cmds)}): {', '.join(py_cmds)}")
+    print(f"Go commands     ({len(go_cmds)}): {', '.join(go_cmds)}")
+
+    if py_cmds != go_cmds:
+        print(f"FAIL: Commands list mismatch:\n  Py: {py_cmds}\n  Go: {go_cmds}")
+        return False
+
+    print("PASS: commands --json parity verified.")
+    return True
+
+
+def test_local_status_parity(py_cmd: list[str], go_cmd: list[str]) -> bool:
+    print("\n--- Testing 'local status --json' Parity ---")
+    rc_py, out_py, _ = run_cmd([*py_cmd, "local", "status", "--json"])
+    rc_go, out_go, _ = run_cmd([*go_cmd, "local", "status", "--json"])
+
+    if rc_py != rc_go:
+        print(f"FAIL: Return code mismatch: Python={rc_py}, Go={rc_go}")
+        return False
+
+    try:
+        data_py = json.loads(out_py)
+    except json.JSONDecodeError as exc:
+        print(f"FAIL: Python CLI output not valid JSON: {exc}\n{out_py}")
+        return False
+
+    try:
+        data_go = json.loads(out_go)
+    except json.JSONDecodeError as exc:
+        print(f"FAIL: Go CLI output not valid JSON: {exc}\n{out_go}")
+        return False
+
+    for k in ["status", "base_url"]:
+        if data_py.get(k) != data_go.get(k):
+            print(f"FAIL: Mismatch for key '{k}': Python={data_py.get(k)}, Go={data_go.get(k)}")
+            return False
+
+    print(f"Python status: {data_py.get('status')} | Go status: {data_go.get('status')}")
+    print(f"Python base_url: {data_py.get('base_url')} | Go base_url: {data_go.get('base_url')}")
+    print("PASS: local status --json parity verified.")
+    return True
+
+
+def test_deferral_parity(py_cmd: list[str], go_cmd: list[str]) -> bool:
+    print("\n--- Testing 'deferral --json' Parity ---")
+    # Test 1: default empty prompt
+    rc_py, out_py, err_py = run_cmd([*py_cmd, "deferral", "--json"])
+    rc_go, out_go, err_go = run_cmd([*go_cmd, "deferral", "--json"])
+
+    if rc_py != 0:
+        print(f"FAIL: Python CLI returned {rc_py}: {err_py}")
+        return False
+    if rc_go != 0:
+        print(f"FAIL: Go CLI returned {rc_go}: {err_go}")
+        return False
+
+    data_py = json.loads(out_py)
+    data_go = json.loads(out_go)
+
+    core_keys = ["should_defer", "recommended_model", "trigger", "quota_profile", "fallback_active"]
+    for k in core_keys:
+        if data_py.get(k) != data_go.get(k):
+            print(f"FAIL: Default prompt mismatch for '{k}': Python={data_py.get(k)}, Go={data_go.get(k)}")
+            return False
+
+    # Test 2: trigger prompt
+    trigger_prompt = "fix race condition in distributed lock"
+    rc_py2, out_py2, err_py2 = run_cmd([*py_cmd, "deferral", trigger_prompt, "--json"])
+    rc_go2, out_go2, err_go2 = run_cmd([*go_cmd, "deferral", trigger_prompt, "--json"])
+
+    if rc_py2 != 0 or rc_go2 != 0:
+        print(f"FAIL: Trigger prompt non-zero rc: Py={rc_py2}, Go={rc_go2}")
+        return False
+
+    data_py2 = json.loads(out_py2)
+    data_go2 = json.loads(out_go2)
+
+    for k in core_keys:
+        if data_py2.get(k) != data_go2.get(k):
+            print(f"FAIL: Trigger prompt mismatch for '{k}': Python={data_py2.get(k)}, Go={data_go2.get(k)}")
+            return False
+
+    print(f"Default defer: Py={data_py.get('should_defer')} | Go={data_go.get('should_defer')}")
+    print(f"Trigger defer: Py={data_py2.get('should_defer')} ({data_py2.get('trigger')}) | Go={data_go2.get('should_defer')} ({data_go2.get('trigger')})")
+    print(f"Recommended:   Py={data_py2.get('recommended_model')} | Go={data_go2.get('recommended_model')}")
+    print("PASS: deferral --json parity verified.")
+    return True
+
+
+def test_claim_inspect_parity(py_cmd: list[str], go_cmd: list[str]) -> bool:
+    print("\n--- Testing 'claim inspect --json' Parity ---")
+    rc_py, out_py, err_py = run_cmd([*py_cmd, "claim", "inspect", "--json"])
+    rc_go, out_go, err_go = run_cmd([*go_cmd, "claim", "inspect", "--json"])
+
+    if rc_py != 0:
+        print(f"FAIL: Python CLI returned {rc_py}: {err_py}")
+        return False
+    if rc_go != 0:
+        print(f"FAIL: Go CLI returned {rc_go}: {err_go}")
+        return False
+
+    data_py = json.loads(out_py)
+    data_go = json.loads(out_go)
+
+    core_keys = ["total_claims", "stale_claims", "stale_threshold_hours", "claims", "warnings"]
+    for k in core_keys:
+        if k not in data_go:
+            print(f"FAIL: Go claim inspect JSON missing key '{k}'")
+            return False
+
+    if data_py.get("total_claims") != data_go.get("total_claims"):
+        print(f"FAIL: total_claims mismatch: Python={data_py.get('total_claims')}, Go={data_go.get('total_claims')}")
+        return False
+    if data_py.get("stale_claims") != data_go.get("stale_claims"):
+        print(f"FAIL: stale_claims mismatch: Python={data_py.get('stale_claims')}, Go={data_go.get('stale_claims')}")
+        return False
+
+    print(f"Python total claims: {data_py.get('total_claims')} | Go total claims: {data_go.get('total_claims')}")
+    print(f"Python stale claims: {data_py.get('stale_claims')} | Go stale claims: {data_go.get('stale_claims')}")
+    print("PASS: claim inspect --json parity verified.")
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Cross-language parity test between Python and Go CLI")
     parser.add_argument("--python-cli", default=r"C:\Code\ai-router\scripts\cli\harness.py")
@@ -134,6 +278,14 @@ def main() -> int:
     if not test_list_parity(py_cmd, go_cmd):
         all_passed = False
     if not test_auth_status_parity(py_cmd, go_cmd):
+        all_passed = False
+    if not test_commands_parity(py_cmd, go_cmd):
+        all_passed = False
+    if not test_local_status_parity(py_cmd, go_cmd):
+        all_passed = False
+    if not test_deferral_parity(py_cmd, go_cmd):
+        all_passed = False
+    if not test_claim_inspect_parity(py_cmd, go_cmd):
         all_passed = False
 
     if all_passed:
