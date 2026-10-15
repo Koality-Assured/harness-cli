@@ -402,7 +402,7 @@ func handlePrompt(runtime *AdapterRuntime, active map[string]*ACPSessionMCP, act
 			update(handle, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": stableID, "status": status, "rawOutput": output})
 		},
 		ToolRegistry: func(ctx context.Context) (ToolDispatcher, error) {
-			return mcpSession.ToolRegistry(runtime.ToolRegistry, ctx)
+			return mcpSession.ToolRegistry(runtime.ToolRegistry, ctx), nil
 		},
 	}
 	result, err := runtime.RunPrompt(context.Background(), "acp", "stdio", ACPRoute, handle, promptText, callbacks)

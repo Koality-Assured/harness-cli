@@ -2,6 +2,7 @@ package chat
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -122,6 +124,308 @@ func ValidateMCPServers(value any) ([]MCPServerConfig, error) {
 	return validated, nil
 }
 
+// DiscoverMCPConfigFile locates the MCP server configuration file.
+// Search order: explicitPath -> <workspaceRoot>/.mcp.json -> ~/.harness/mcp.json.
+// If explicitPath is provided and does not exist, an error is returned.
+// Returns the file path, whether it was discovered from workspace root (.mcp.json), and any error.
+func DiscoverMCPConfigFile(workspaceRoot, explicitPath string) (string, bool, error) {
+	if explicitPath != "" {
+		if _, err := os.Stat(explicitPath); err != nil {
+			if errors.Is(err, os.ErrNotExist) || os.IsNotExist(err) {
+				return "", false, fmt.Errorf("explicit MCP config file not found: %s", explicitPath)
+			}
+			return "", false, fmt.Errorf("failed to access MCP config %s: %w", explicitPath, err)
+		}
+		return explicitPath, false, nil
+	}
+
+	root := workspaceRoot
+	if root == "" {
+		root, _ = os.Getwd()
+	}
+	candidate1 := filepath.Join(root, ".mcp.json")
+	if fi, err := os.Stat(candidate1); err == nil && !fi.IsDir() {
+		return candidate1, true, nil
+	}
+
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidate2 := filepath.Join(home, ".harness", "mcp.json")
+		if fi, err := os.Stat(candidate2); err == nil && !fi.IsDir() {
+			return candidate2, false, nil
+		}
+	}
+
+	return "", false, nil
+}
+
+// DiscoverMCPConfig searches for and loads MCP server configurations.
+// If no configuration file is found, an empty slice is returned without error.
+func DiscoverMCPConfig(workspaceRoot, explicitPath string) ([]MCPServerConfig, error) {
+	targetPath, _, err := DiscoverMCPConfigFile(workspaceRoot, explicitPath)
+	if err != nil {
+		return nil, err
+	}
+	if targetPath == "" {
+		return []MCPServerConfig{}, nil
+	}
+
+	data, err := os.ReadFile(targetPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || os.IsNotExist(err) {
+			return []MCPServerConfig{}, nil
+		}
+		return nil, fmt.Errorf("failed to read MCP config %s: %w", targetPath, err)
+	}
+
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return []MCPServerConfig{}, nil
+	}
+
+	return parseMCPServersJSON(data)
+}
+
+func parseMCPServersJSON(data []byte) ([]MCPServerConfig, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var raw any
+	if err := decoder.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
+	}
+
+	var rawServers []map[string]any
+
+	switch typed := raw.(type) {
+	case []any:
+		for i, item := range typed {
+			obj, ok := item.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("server entry at index %d must be an object", i)
+			}
+			rawServers = append(rawServers, obj)
+		}
+	case map[string]any:
+		if mcpServers, exists := typed["mcpServers"]; exists {
+			servers, err := extractServersFromObject(mcpServers)
+			if err != nil {
+				return nil, err
+			}
+			rawServers = servers
+		} else if servers, exists := typed["servers"]; exists {
+			serverList, err := extractServersFromObject(servers)
+			if err != nil {
+				return nil, err
+			}
+			rawServers = serverList
+		} else {
+			keys := make([]string, 0, len(typed))
+			for k := range typed {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				val := typed[key]
+				obj, ok := val.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("server entry %q must be an object", key)
+				}
+				if _, hasName := obj["name"]; !hasName {
+					obj["name"] = key
+				}
+				rawServers = append(rawServers, obj)
+			}
+		}
+	default:
+		return nil, errors.New("MCP configuration root must be an object or array")
+	}
+
+	return validateAndResolveServers(rawServers)
+}
+
+func extractServersFromObject(val any) ([]map[string]any, error) {
+	var result []map[string]any
+	switch typed := val.(type) {
+	case []any:
+		for i, item := range typed {
+			obj, ok := item.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("server entry at index %d must be an object", i)
+			}
+			result = append(result, obj)
+		}
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for k := range typed {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			item := typed[key]
+			obj, ok := item.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("server entry %q must be an object", key)
+			}
+			if _, hasName := obj["name"]; !hasName {
+				obj["name"] = key
+			}
+			result = append(result, obj)
+		}
+	default:
+		return nil, errors.New("servers configuration must be an object map or array")
+	}
+	return result, nil
+}
+
+func validateAndResolveServers(rawServers []map[string]any) ([]MCPServerConfig, error) {
+	if len(rawServers) > MCPMaxServers {
+		return nil, fmt.Errorf("MCP configuration exceeds maximum of %d servers", MCPMaxServers)
+	}
+	validated := make([]MCPServerConfig, 0, len(rawServers))
+	for index, obj := range rawServers {
+		name, _ := obj["name"].(string)
+		name = strings.TrimSpace(name)
+		if name == "" || len(name) > 128 {
+			return nil, fmt.Errorf("mcpServers[%d].name must be a non-empty string of at most 128 characters", index)
+		}
+
+		cmdRaw, exists := obj["command"]
+		if !exists {
+			return nil, fmt.Errorf("mcpServers[%d] (%q) missing required 'command'", index, name)
+		}
+		command, ok := cmdRaw.(string)
+		if !ok || strings.TrimSpace(command) == "" || len(command) > 4096 || strings.ContainsRune(command, 0) {
+			return nil, fmt.Errorf("mcpServers[%d] (%q) command must be a non-empty string of at most 4096 characters", index, name)
+		}
+
+		resolvedCmd, err := resolveMCPCommand(name, command)
+		if err != nil {
+			return nil, err
+		}
+
+		args := []string{}
+		if argsVal, exists := obj["args"]; exists && argsVal != nil {
+			switch arr := argsVal.(type) {
+			case []any:
+				if len(arr) > MCPMaxArgs {
+					return nil, fmt.Errorf("mcpServers[%d] (%q).args exceeds %d items", index, name, MCPMaxArgs)
+				}
+				for argIdx, item := range arr {
+					argStr, ok := item.(string)
+					if !ok || len(argStr) > MCPMaxArgLength || strings.ContainsRune(argStr, 0) {
+						return nil, fmt.Errorf("mcpServers[%d] (%q).args[%d] must be a bounded string", index, name, argIdx)
+					}
+					args = append(args, argStr)
+				}
+			case []string:
+				if len(arr) > MCPMaxArgs {
+					return nil, fmt.Errorf("mcpServers[%d] (%q).args exceeds %d items", index, name, MCPMaxArgs)
+				}
+				for argIdx, argStr := range arr {
+					if len(argStr) > MCPMaxArgLength || strings.ContainsRune(argStr, 0) {
+						return nil, fmt.Errorf("mcpServers[%d] (%q).args[%d] must be a bounded string", index, name, argIdx)
+					}
+					args = append(args, argStr)
+				}
+			default:
+				return nil, fmt.Errorf("mcpServers[%d] (%q).args must be an array", index, name)
+			}
+		}
+
+		env := map[string]string{}
+		if envVal, exists := obj["env"]; exists && envVal != nil {
+			switch envTyped := envVal.(type) {
+			case map[string]any:
+				if len(envTyped) > MCPMaxEnvVars {
+					return nil, fmt.Errorf("mcpServers[%d] (%q).env exceeds %d variables", index, name, MCPMaxEnvVars)
+				}
+				envBytes := 0
+				keys := make([]string, 0, len(envTyped))
+				for k := range envTyped {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				for _, k := range keys {
+					v := envTyped[k]
+					vStr, ok := v.(string)
+					if !ok {
+						vStr = fmt.Sprint(v)
+					}
+					if !mcpEnvName.MatchString(k) || strings.ContainsRune(vStr, 0) || len(vStr) > MCPMaxEnvValueLength {
+						return nil, fmt.Errorf("mcpServers[%d] (%q).env[%q] has invalid name or value", index, name, k)
+					}
+					env[k] = vStr
+					envBytes += len(k) + len(vStr)
+				}
+				if envBytes > MCPMaxEnvTotalLength {
+					return nil, fmt.Errorf("mcpServers[%d] (%q).env exceeds size limit", index, name)
+				}
+			case []any:
+				if len(envTyped) > MCPMaxEnvVars {
+					return nil, fmt.Errorf("mcpServers[%d] (%q).env exceeds %d variables", index, name, MCPMaxEnvVars)
+				}
+				envBytes := 0
+				for envIdx, item := range envTyped {
+					pair, ok := item.(map[string]any)
+					if !ok {
+						return nil, fmt.Errorf("mcpServers[%d] (%q).env[%d] must be an object", index, name, envIdx)
+					}
+					k, _ := pair["name"].(string)
+					v, _ := pair["value"].(string)
+					if !mcpEnvName.MatchString(k) || strings.ContainsRune(v, 0) || len(v) > MCPMaxEnvValueLength {
+						return nil, fmt.Errorf("mcpServers[%d] (%q).env[%d] has invalid name or value", index, name, envIdx)
+					}
+					if _, dup := env[k]; dup {
+						return nil, fmt.Errorf("mcpServers[%d] (%q).env contains duplicate variable %q", index, name, k)
+					}
+					env[k] = v
+					envBytes += len(k) + len(v)
+				}
+				if envBytes > MCPMaxEnvTotalLength {
+					return nil, fmt.Errorf("mcpServers[%d] (%q).env exceeds size limit", index, name)
+				}
+			default:
+				return nil, fmt.Errorf("mcpServers[%d] (%q).env must be an object or array", index, name)
+			}
+		}
+
+		validated = append(validated, MCPServerConfig{
+			Name:    name,
+			Command: resolvedCmd,
+			Args:    args,
+			Env:     env,
+		})
+	}
+	return validated, nil
+}
+
+func resolveMCPCommand(name, command string) (string, error) {
+	if filepath.IsAbs(command) {
+		clean := filepath.Clean(command)
+		if fi, err := os.Stat(clean); err == nil && !fi.IsDir() {
+			return clean, nil
+		}
+		if resolved, err := exec.LookPath(clean); err == nil && filepath.IsAbs(resolved) {
+			return filepath.Clean(resolved), nil
+		}
+		return "", fmt.Errorf("MCP server %q command %q not found or not executable", name, command)
+	}
+
+	if strings.ContainsAny(command, `/\`) {
+		return "", fmt.Errorf("MCP server %q command %q is a relative path; must be absolute or executable in PATH (insecure CWE-426)", name, command)
+	}
+
+	resolved, err := exec.LookPath(command)
+	if err != nil {
+		if errors.Is(err, exec.ErrDot) {
+			return "", fmt.Errorf("MCP server %q command %q resolved to current directory (insecure CWE-426)", name, command)
+		}
+		return "", fmt.Errorf("MCP server %q command %q not found in PATH: %w", name, command, err)
+	}
+	if !filepath.IsAbs(resolved) {
+		return "", fmt.Errorf("MCP server %q command %q resolved to non-absolute path %q (insecure CWE-426)", name, command, resolved)
+	}
+	return filepath.Clean(resolved), nil
+}
+
 type mcpMessage struct {
 	value map[string]any
 	err   error
@@ -202,6 +506,7 @@ func (c *MCPStdioClient) startProcess() error {
 	cmd.Dir = c.cwd
 	cmd.Env = mcpProcessEnv(c.config.Env)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdinReader, stdoutWriter, io.Discard
+	setSysProcAttr(cmd)
 	if err := cmd.Start(); err != nil {
 		_ = stdinReader.Close()
 		_ = stdinWriter.Close()
@@ -383,11 +688,11 @@ func (c *MCPStdioClient) writeWithLimit(ctx context.Context, timeout <-chan time
 		return nil
 	case <-ctx.Done():
 		_ = stdin.Close()
-		_ = command.Process.Kill()
+		killProcessTree(command)
 		return &mcpClientError{text: "MCP tool call was cancelled"}
 	case <-timeout:
 		_ = stdin.Close()
-		_ = command.Process.Kill()
+		killProcessTree(command)
 		return &mcpTimeoutError{method: method}
 	}
 }
@@ -794,7 +1099,7 @@ func (c *MCPStdioClient) stopProcess() {
 		}
 	}
 	if cmd != nil && cmd.Process != nil && !wait(exit, MCPShutdownGrace) {
-		_ = cmd.Process.Kill()
+		killProcessTree(cmd)
 		_ = wait(exit, MCPShutdownGrace)
 	}
 	_ = wait(readerDone, MCPShutdownGrace)
@@ -823,14 +1128,6 @@ func (c *MCPStdioClient) ReturnCode() (int, bool) {
 		}
 		return 0, false
 	}
-}
-
-type exposedMCPTool struct {
-	alias       string
-	client      *MCPStdioClient
-	source      string
-	description string
-	schema      map[string]any
 }
 
 // ACPSessionMCP owns configured stdio MCP subprocesses for one active ACP session.
@@ -866,14 +1163,22 @@ func (s *ACPSessionMCP) start() error {
 	return nil
 }
 
-func (s *ACPSessionMCP) ToolRegistry(base *ToolRegistry, ctx context.Context) (ToolDispatcher, error) {
+// ToolRegistry discovers tools from all active clients and wraps them into a *ToolRegistry layered over base.
+func (s *ACPSessionMCP) ToolRegistry(base *ToolRegistry, ctxOpt ...context.Context) *ToolRegistry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ended {
-		return nil, &mcpClientError{text: "ACP session is closed"}
-	}
 	if base == nil {
 		base = NewToolRegistry()
+	}
+	result := NewToolRegistry()
+	for _, name := range base.order {
+		if def, ok := base.tools[name]; ok {
+			result.tools[name] = def
+			result.order = append(result.order, name)
+		}
+	}
+	if s.ended {
+		return result
 	}
 	dead := false
 	for _, client := range s.clients {
@@ -887,46 +1192,129 @@ func (s *ACPSessionMCP) ToolRegistry(base *ToolRegistry, ctx context.Context) (T
 	}
 	if len(s.clients) == 0 && len(s.configs) > 0 {
 		if err := s.start(); err != nil {
-			return nil, err
+			return result
 		}
 	}
-	exposed := map[string]exposedMCPTool{}
-	order := make([]string, 0)
-	baseDefinitions := base.ProviderDefinitions()
+	ctx := context.Background()
+	if len(ctxOpt) > 0 && ctxOpt[0] != nil {
+		ctx = ctxOpt[0]
+	} else {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, MCPRequestTimeout)
+		defer cancel()
+	}
 	for serverIndex, client := range s.clients {
 		tools, err := client.RefreshTools(ctx)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		for toolIndex, raw := range tools {
-			source := raw["name"].(string)
+			source, _ := raw["name"].(string)
+			if source == "" {
+				continue
+			}
 			safe := strings.Trim(mcpAliasChars.ReplaceAllString(source, "_"), "_-")
 			if safe == "" {
 				safe = "tool"
 			}
 			alias := truncateRunes(fmt.Sprintf("mcp%d_%d_%s", serverIndex, toolIndex, safe), 64)
-			if _, exists := exposed[alias]; exists {
-				return nil, &mcpClientError{text: "MCP tool names collide after provider-safe namespacing"}
+			desc, _ := raw["description"].(string)
+			prefix := fmt.Sprintf("MCP server %q tool %q", client.config.Name, source)
+			if desc != "" {
+				prefix += ": " + desc
 			}
-			for _, local := range baseDefinitions {
-				if local.Name == alias {
-					return nil, &mcpClientError{text: "MCP tool names collide after provider-safe namespacing"}
+			schema, ok := raw["inputSchema"].(map[string]any)
+			if !ok || schema == nil {
+				schema = map[string]any{"type": "object"}
+			}
+			clientRef := client
+			src := source
+			toolDef := ToolDefinition{
+				Name:        alias,
+				Description: truncateRunes(prefix, 8000),
+				InputSchema: schema,
+				Handler: func(args map[string]any) (any, error) {
+					callCtx, callCancel := context.WithTimeout(context.Background(), MCPRequestTimeout)
+					defer callCancel()
+					outcome := clientRef.CallTool(callCtx, src, args)
+					if outcome.Error != "" {
+						return nil, errors.New(outcome.Error)
+					}
+					return outcome.Result, nil
+				},
+			}
+			result.tools[alias] = toolDef
+			result.order = append(result.order, alias)
+			if source != alias {
+				if _, exists := result.tools[source]; !exists {
+					srcDef := toolDef
+					srcDef.Name = source
+					result.tools[source] = srcDef
 				}
 			}
-			description, _ := raw["description"].(string)
-			prefix := fmt.Sprintf("MCP server %q tool %q", client.config.Name, source)
-			if description != "" {
-				prefix += ": " + description
-			}
-			schema := raw["inputSchema"].(map[string]any)
-			exposed[alias] = exposedMCPTool{alias: alias, client: client, source: source, description: truncateRunes(prefix, 8000), schema: schema}
-			order = append(order, alias)
 		}
 	}
-	if len(exposed)+len(baseDefinitions) > MCPMaxToolsTotal {
-		return nil, &mcpClientError{text: "ACP session exposed too many total tools"}
+	return result
+}
+
+type MCPServerStatus struct {
+	Name    string
+	Command string
+	State   string
+}
+
+func (s *ACPSessionMCP) ServerStatuses() []MCPServerStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	statuses := make([]MCPServerStatus, 0, len(s.clients))
+	for _, client := range s.clients {
+		state := "connected"
+		if client.closed {
+			state = "disconnected"
+		} else if _, exited := client.ReturnCode(); exited {
+			state = "stopped"
+		}
+		statuses = append(statuses, MCPServerStatus{
+			Name:    client.config.Name,
+			Command: client.config.Command,
+			State:   state,
+		})
 	}
-	return &acpToolRegistry{base: base, exposed: exposed, order: order, ctx: ctx}, nil
+	return statuses
+}
+
+type MCPToolInfo struct {
+	ServerName  string
+	Name        string
+	Description string
+}
+
+func (s *ACPSessionMCP) Tools(ctx context.Context) ([]MCPToolInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ended {
+		return nil, errors.New("MCP session is closed")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var result []MCPToolInfo
+	for _, client := range s.clients {
+		tools, err := client.RefreshTools(ctx)
+		if err != nil {
+			continue
+		}
+		for _, raw := range tools {
+			name, _ := raw["name"].(string)
+			desc, _ := raw["description"].(string)
+			result = append(result, MCPToolInfo{
+				ServerName:  client.config.Name,
+				Name:        name,
+				Description: desc,
+			})
+		}
+	}
+	return result, nil
 }
 
 func (s *ACPSessionMCP) Cancel() {
@@ -959,33 +1347,6 @@ func (s *ACPSessionMCP) closeProcesses() {
 	}
 }
 
-type acpToolRegistry struct {
-	base    *ToolRegistry
-	exposed map[string]exposedMCPTool
-	order   []string
-	ctx     context.Context
-}
-
-func (r *acpToolRegistry) ProviderDefinitions() []ToolDefinition {
-	definitions := r.base.ProviderDefinitions()
-	for _, alias := range r.order {
-		item := r.exposed[alias]
-		definitions = append(definitions, ToolDefinition{Name: item.alias, Description: item.description, InputSchema: item.schema})
-	}
-	return definitions
-}
-
-func (r *acpToolRegistry) ExecuteTool(name string, arguments any) ToolOutcome {
-	remote, exists := r.exposed[name]
-	if !exists {
-		return r.base.ExecuteTool(name, arguments)
-	}
-	object, ok := arguments.(map[string]any)
-	if !ok {
-		return ToolOutcome{Error: "MCP tool arguments must be a JSON object."}
-	}
-	return remote.client.CallTool(r.ctx, remote.source, object)
-}
 
 func truncateRunes(value string, max int) string {
 	runes := []rune(value)
