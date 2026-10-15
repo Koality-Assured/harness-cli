@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -27,8 +28,9 @@ import (
 var chatOptions chatOptionsValue
 
 var (
-	thinkingFlag string
-	effortFlag   string
+	thinkingFlag    string
+	effortFlag      string
+	permissionsFlag string
 )
 
 var chatCmd = &cobra.Command{
@@ -41,6 +43,9 @@ var chatCmd = &cobra.Command{
 		opts.noMCP = noMCP
 		opts.thinking = thinkingFlag
 		opts.effort = effortFlag
+		if opts.permissions == "" && permissionsFlag != "" {
+			opts.permissions = permissionsFlag
+		}
 		return runChat(cmd, opts, nil, defaultChatCredential)
 	},
 }
@@ -121,6 +126,7 @@ type chatOptionsValue struct {
 	noMCP           bool
 	thinking        string
 	effort          string
+	permissions     string
 }
 
 // SlashOptions carries state for slash command inspection and mutation.
@@ -128,6 +134,7 @@ type SlashOptions struct {
 	Thinking       *string
 	Effort         *string
 	AutoCompactPct **float64
+	Permissions    *chat.PermissionPolicy
 }
 
 type chatMCPState struct {
@@ -169,6 +176,7 @@ func resetChatFlags() {
 	noMCP = false
 	thinkingFlag = ""
 	effortFlag = ""
+	permissionsFlag = "ask"
 	chatOptions = chatOptionsValue{}
 }
 
@@ -197,6 +205,7 @@ func init() {
 	chatCmd.Flags().BoolVar(&noMCP, "no-mcp", false, "Disable MCP server discovery and integration for this chat session")
 	chatCmd.Flags().StringVar(&thinkingFlag, "thinking", "", "Thinking budget in tokens (integer) or effort level ('off', 'low', 'medium', 'high')")
 	chatCmd.Flags().StringVar(&effortFlag, "effort", "", "Reasoning effort level ('low', 'medium', 'high')")
+	chatCmd.Flags().StringVar(&permissionsFlag, "permissions", "ask", "Tool execution permission mode ('ask', 'auto-edit', 'yolo')")
 	sessionsCmd.AddCommand(sessionsListCmd, sessionsRenameCmd, sessionsSearchCmd)
 }
 
@@ -336,15 +345,30 @@ func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.Provider
 		}
 	}()
 
+	permMode := strings.ToLower(strings.TrimSpace(options.permissions))
+	if permMode == "" {
+		permMode = chat.PermissionModeAsk
+	}
+	if permMode != chat.PermissionModeAsk && permMode != chat.PermissionModeAutoEdit && permMode != chat.PermissionModeYolo {
+		return fmt.Errorf("invalid --permissions mode '%s'. Allowed: ask, auto-edit, yolo", options.permissions)
+	}
+
 	if querySet {
 		stream := !options.noStream
 		budget, effort := chat.ResolveThinking(0, options.effort, options.thinking)
+		permPolicy := chat.NewPermissionPolicy(permMode, false)
+		activeTools := mcpState.tools
+		if activeTools == nil {
+			activeTools = chat.NewToolRegistry()
+		}
+		_ = chat.RegisterAskQuestionTool(activeTools, false, nil, cmd.OutOrStdout())
 		turnOptions := chat.TurnOptions{
 			Stream:          stream,
-			ToolRegistry:    mcpState.tools,
+			ToolRegistry:    activeTools,
 			ThinkingBudget:  budget,
 			ReasoningEffort: effort,
 			Thinking:        options.thinking,
+			Permissions:     permPolicy,
 		}
 		if stream {
 			turnOptions.OnDelta = func(delta string) { _, _ = io.WriteString(cmd.OutOrStdout(), delta) }
@@ -370,7 +394,8 @@ func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.Provider
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return errors.New("interactive chat requires a TTY; pass -q/--query or --query-file")
 	}
-	return runInteractiveChat(cmd, store, session, provider, model, apiKey, client, options.noStream, mcpState, options.thinking, options.effort)
+	permPolicy := chat.NewPermissionPolicy(permMode, true)
+	return runInteractiveChat(cmd, store, session, provider, model, apiKey, client, options.noStream, mcpState, options.thinking, options.effort, permPolicy)
 }
 
 func openOrResumeSession(store *chat.SessionStore, options chatOptionsValue) (*chat.Session, int, error) {
@@ -563,10 +588,13 @@ func loadChatQuery(options chatOptionsValue) (string, bool, error) {
 	return "", false, nil
 }
 
-func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *chat.Session, provider, model, apiKey string, client *chat.ProviderClient, noStream bool, mcpState *chatMCPState, initialThinking, initialEffort string) error {
+func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *chat.Session, provider, model, apiKey string, client *chat.ProviderClient, noStream bool, mcpState *chatMCPState, initialThinking, initialEffort string, permPolicy *chat.PermissionPolicy) error {
 	thinkingVal := initialThinking
 	effortVal := initialEffort
 	var autoCompactPct *float64
+	if permPolicy == nil {
+		permPolicy = chat.NewPermissionPolicy(chat.PermissionModeAsk, true)
+	}
 
 	status, err := chat.GetSessionStatus(store, session.ID)
 	if err != nil {
@@ -580,11 +608,30 @@ func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *c
 	signal.Notify(signals, os.Interrupt)
 	defer signal.Stop(signals)
 	var pending []string
+	var pendingMu sync.Mutex
+
+	var currentTurnCtx context.Context
+	var turnCtxMu sync.Mutex
+	pumpReader := &dynamicPumpReader{
+		pump: pump,
+		getCtx: func() context.Context {
+			turnCtxMu.Lock()
+			defer turnCtxMu.Unlock()
+			if currentTurnCtx != nil {
+				return currentTurnCtx
+			}
+			return context.Background()
+		},
+	}
+
 	for {
 		var line string
+		pendingMu.Lock()
 		if len(pending) > 0 {
 			line, pending = pending[0], pending[1:]
+			pendingMu.Unlock()
 		} else {
+			pendingMu.Unlock()
 			fmt.Fprint(cmd.OutOrStdout(), "> ")
 			value, open := pump.get()
 			if !open {
@@ -600,6 +647,7 @@ func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *c
 			Thinking:       &thinkingVal,
 			Effort:         &effortVal,
 			AutoCompactPct: &autoCompactPct,
+			Permissions:    permPolicy,
 		}
 		if handled, exit := handleChatSlash(cmd, store, session, &model, provider, apiKey, client, line, mcpState, slashOpts); handled {
 			if exit {
@@ -609,6 +657,10 @@ func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *c
 		}
 		steered := []string{}
 		ctx, cancel := context.WithCancel(context.Background())
+		turnCtxMu.Lock()
+		currentTurnCtx = ctx
+		turnCtxMu.Unlock()
+
 		done := make(chan struct {
 			text string
 			err  error
@@ -617,6 +669,7 @@ func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *c
 		if mcpState != nil && mcpState.tools != nil {
 			activeRegistry = mcpState.tools
 		}
+		_ = chat.RegisterAskQuestionTool(activeRegistry, true, pumpReader, cmd.OutOrStdout())
 		budget, effort := chat.ResolveThinking(0, effortVal, thinkingVal)
 		turnOptions := chat.TurnOptions{
 			Stream:          !noStream,
@@ -624,6 +677,16 @@ func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *c
 			ThinkingBudget:  budget,
 			ReasoningEffort: effort,
 			Thinking:        thinkingVal,
+			Permissions:     permPolicy,
+			PromptCallback: func(cbCtx context.Context, name string, arguments map[string]any) (chat.PromptDecision, string, error) {
+				return promptToolConfirmation(cbCtx, cmd.OutOrStdout(), pump, name, arguments, func(drained []string) {
+					if session.BusyMode == "queue" {
+						pendingMu.Lock()
+						pending = append(pending, drained...)
+						pendingMu.Unlock()
+					}
+				})
+			},
 		}
 		if !noStream {
 			turnOptions.OnDelta = func(delta string) { _, _ = io.WriteString(cmd.OutOrStdout(), delta) }
@@ -699,11 +762,13 @@ func handleChatSlash(cmd *cobra.Command, store *chat.SessionStore, session *chat
 	var thinkingHolder *string
 	var effortHolder *string
 	var autoCompactHolder **float64
+	var permPolicy *chat.PermissionPolicy
 	for _, item := range extra {
 		if opt, ok := item.(*SlashOptions); ok && opt != nil {
 			thinkingHolder = opt.Thinking
 			effortHolder = opt.Effort
 			autoCompactHolder = opt.AutoCompactPct
+			permPolicy = opt.Permissions
 		}
 	}
 	text := strings.TrimSpace(line)
@@ -730,6 +795,9 @@ func handleChatSlash(cmd *cobra.Command, store *chat.SessionStore, session *chat
 			break
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), formatChatStatus(status, *model))
+		if permPolicy != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "permissions=%s\n", permPolicy.Mode())
+		}
 		inputTokens := int64(0)
 		outputTokens := int64(0)
 		if v, ok := status.InputTokens.(int64); ok {
@@ -1109,6 +1177,25 @@ func handleChatSlash(cmd *cobra.Command, store *chat.SessionStore, session *chat
 		default:
 			fmt.Fprintln(cmd.ErrOrStderr(), "usage: /mcp [list|tools|reload]")
 		}
+	case "permissions":
+		if permPolicy == nil {
+			fmt.Fprintln(cmd.ErrOrStderr(), "error: permissions policy not available")
+			break
+		}
+		if argument == "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "permissions=%s\n", permPolicy.Mode())
+			break
+		}
+		val := strings.ToLower(strings.TrimSpace(argument))
+		if val != chat.PermissionModeAsk && val != chat.PermissionModeAutoEdit && val != chat.PermissionModeYolo {
+			fmt.Fprintln(cmd.ErrOrStderr(), "usage: /permissions [ask|auto-edit|yolo]")
+			break
+		}
+		if err := permPolicy.SetMode(val); err != nil {
+			fmt.Fprintln(cmd.ErrOrStderr(), err)
+			break
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "permission mode set to %s\n", val)
 	default:
 		fmt.Fprintf(cmd.ErrOrStderr(), "unknown command: /%s (try /help)\n", name)
 	}
@@ -1116,6 +1203,110 @@ func handleChatSlash(cmd *cobra.Command, store *chat.SessionStore, session *chat
 }
 
 const busyHelp = "usage: /busy [status|interrupt|queue|steer|help]\ninterrupt (default) aborts a turn with Ctrl+C; queue sends waiting lines in order; steer sends one waiting line after the current answer. True steer-at-tool-boundary waits for tool batches."
+
+func promptToolConfirmation(ctx context.Context, out io.Writer, pump *chatLinePump, name string, arguments map[string]any, onDrained func([]string)) (chat.PromptDecision, string, error) {
+	return promptToolConfirmationWithReader(ctx, out, nil, pump, name, arguments, onDrained)
+}
+
+func promptToolConfirmationWithReader(ctx context.Context, out io.Writer, in io.Reader, pump *chatLinePump, name string, arguments map[string]any, onDrained func([]string)) (chat.PromptDecision, string, error) {
+	if out == nil {
+		out = io.Discard
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return chat.DecisionDeny, "Tool execution cancelled (interrupted).", err
+	}
+	// Drain pre-buffered keystrokes before confirmation prompts.
+	if pump != nil {
+		drained := pump.takeAvailable(-1)
+		if len(drained) > 0 && onDrained != nil {
+			onDrained(drained)
+		}
+	}
+
+	class := chat.ClassifyTool(name)
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "[Tool Approval Required] %s (%s)\n", name, class)
+	if class == chat.ToolClassCommand {
+		cmdStr := chat.ExtractCommandString(name, arguments)
+		if cmdStr != "" {
+			fmt.Fprintf(out, "  Command: %s\n", cmdStr)
+		}
+	} else if class == chat.ToolClassEdit {
+		filePath := chat.ExtractFilePath(name, arguments)
+		if filePath != "" {
+			fmt.Fprintf(out, "  Path: %s\n", filePath)
+		}
+	}
+	if len(arguments) > 0 {
+		if rawJSON, err := json.MarshalIndent(arguments, "    ", "  "); err == nil {
+			fmt.Fprintf(out, "  Arguments:\n    %s\n", string(rawJSON))
+		}
+	}
+	fmt.Fprintln(out, "  [1] Allow once (y)")
+	fmt.Fprintln(out, "  [2] Always allow in this session (a)")
+	fmt.Fprintln(out, "  [3] Deny (d/n)")
+
+	var scanner *bufio.Scanner
+	if pump == nil && in != nil {
+		scanner = bufio.NewScanner(in)
+	}
+
+	readLine := func() (string, bool, error) {
+		if err := ctx.Err(); err != nil {
+			return "", false, err
+		}
+		if pump != nil {
+			return pump.getWithContext(ctx)
+		}
+		if scanner != nil {
+			if scanner.Scan() {
+				return scanner.Text(), true, nil
+			}
+			if err := scanner.Err(); err != nil {
+				return "", false, err
+			}
+			return "", false, nil
+		}
+		return "", false, nil
+	}
+
+	for {
+		fmt.Fprint(out, "Choice [1-3, y/a/d]: ")
+		line, ok, err := readLine()
+		if err != nil {
+			return chat.DecisionDeny, "Tool execution cancelled (interrupted).", err
+		}
+		if !ok {
+			return chat.DecisionDeny, "Tool execution cancelled by user (EOF).", nil
+		}
+		choice := strings.ToLower(strings.TrimSpace(line))
+		switch choice {
+		case "1", "y", "yes", "allow", "allow_once":
+			return chat.DecisionAllowOnce, "", nil
+		case "2", "a", "all", "session", "always", "allow_session":
+			return chat.DecisionAllowSession, "", nil
+		case "3", "d", "deny", "n", "no":
+			fmt.Fprint(out, "Reason for denial (optional, press Enter to skip): ")
+			feedbackLine, ok, err := readLine()
+			if err != nil {
+				return chat.DecisionDeny, "Tool execution cancelled (interrupted).", err
+			}
+			feedback := ""
+			if ok {
+				feedback = strings.TrimSpace(feedbackLine)
+			}
+			if feedback == "" {
+				feedback = "Tool execution denied by user."
+			}
+			return chat.DecisionDeny, feedback, nil
+		default:
+			fmt.Fprintln(out, "Invalid choice. Please enter 1 (allow once), 2 (allow for session), or 3 (deny).")
+		}
+	}
+}
 
 func formatChatStatus(status chat.SessionStatus, model string) string {
 	input, output := "n/a", "n/a"
@@ -1239,7 +1430,51 @@ func newChatLinePump(reader io.Reader) *chatLinePump {
 	return pump
 }
 
-func (p *chatLinePump) get() (string, bool) { line, ok := <-p.lines; return line, ok }
+func (p *chatLinePump) getWithContext(ctx context.Context) (string, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return "", false, ctx.Err()
+	case line, ok := <-p.lines:
+		return line, ok, nil
+	}
+}
+
+func (p *chatLinePump) get() (string, bool) {
+	line, ok, _ := p.getWithContext(context.Background())
+	return line, ok
+}
+
+type dynamicPumpReader struct {
+	pump   *chatLinePump
+	getCtx func() context.Context
+	buf    []byte
+}
+
+func (r *dynamicPumpReader) Read(p []byte) (int, error) {
+	if len(r.buf) == 0 {
+		var ctx context.Context
+		if r.getCtx != nil {
+			ctx = r.getCtx()
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		line, ok, err := r.pump.getWithContext(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if !ok {
+			return 0, io.EOF
+		}
+		r.buf = []byte(line + "\n")
+	}
+	n := copy(p, r.buf)
+	r.buf = r.buf[n:]
+	return n, nil
+}
 func (p *chatLinePump) takeAvailable(limit int) []string {
 	result := []string{}
 	for limit < 0 || len(result) < limit {

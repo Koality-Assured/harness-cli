@@ -28,6 +28,8 @@ type TurnOptions struct {
 	ThinkingBudget  int
 	ReasoningEffort string
 	Thinking        string
+	Permissions     *PermissionPolicy
+	PromptCallback  PromptCallback
 }
 
 // RunTurn stores a user message, drives provider/tool rounds, and persists the
@@ -136,6 +138,15 @@ func RunTurn(ctx context.Context, store *SessionStore, sessionID, userText, prov
 				}
 				if argumentError != "" {
 					outcome.Error = argumentError
+				} else if options.Permissions != nil {
+					allowed, denial, permErr := options.Permissions.CheckPermission(ctx, call.Name, arguments, options.PromptCallback)
+					if permErr != nil {
+						outcome.Error = permErr.Error()
+					} else if !allowed {
+						outcome.Error = denial
+					} else {
+						outcome = registry.ExecuteTool(call.Name, arguments)
+					}
 				} else {
 					outcome = registry.ExecuteTool(call.Name, arguments)
 				}
