@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -29,7 +30,10 @@ var chatCmd = &cobra.Command{
 	Short:        "One-shot or interactive agent conversation",
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return runChat(cmd, chatOptions, nil, defaultChatCredential)
+		opts := chatOptions
+		opts.mcpConfig = mcpConfigFile
+		opts.noMCP = noMCP
+		return runChat(cmd, opts, nil, defaultChatCredential)
 	},
 }
 
@@ -105,6 +109,14 @@ type chatOptionsValue struct {
 	system          string
 	systemFile      string
 	files           []string
+	mcpConfig       string
+	noMCP           bool
+}
+
+type chatMCPState struct {
+	session    *chat.ACPSessionMCP
+	tools      *chat.ToolRegistry
+	configPath string
 }
 
 type chatCommandDef struct {
@@ -130,6 +142,25 @@ var builtinCommands = []chatCommandDef{
 	{"quit", "Exit the interactive REPL"},
 }
 
+var (
+	mcpConfigFile string
+	noMCP         bool
+)
+
+func resetChatFlags() {
+	mcpConfigFile = ""
+	noMCP = false
+	chatOptions = chatOptionsValue{}
+}
+
+func promptWorkspaceMCPTrust(in io.Reader, out io.Writer, path string) bool {
+	fmt.Fprintf(out, "Trust workspace MCP configuration at %s? [y/N]: ", path)
+	reader := bufio.NewReader(in)
+	ans, _ := reader.ReadString('\n')
+	ans = strings.TrimSpace(strings.ToLower(ans))
+	return ans == "y" || ans == "yes"
+}
+
 func init() {
 	chatCmd.Flags().StringVarP(&chatOptions.query, "query", "q", "", "One-shot user message")
 	chatCmd.Flags().StringVar(&chatOptions.queryFile, "query-file", "", "Read one-shot user message from file")
@@ -143,6 +174,8 @@ func init() {
 	chatCmd.Flags().StringVar(&chatOptions.system, "system", "", "Custom system prompt text")
 	chatCmd.Flags().StringVar(&chatOptions.systemFile, "system-file", "", "Load system prompt from file")
 	chatCmd.Flags().StringSliceVarP(&chatOptions.files, "file", "f", nil, "Context file(s) to prepend to the user message")
+	chatCmd.Flags().StringVar(&mcpConfigFile, "mcp-config", "", "Path to MCP server configuration JSON")
+	chatCmd.Flags().BoolVar(&noMCP, "no-mcp", false, "Disable MCP server discovery and integration for this chat session")
 	sessionsCmd.AddCommand(sessionsListCmd, sessionsRenameCmd, sessionsSearchCmd)
 }
 
@@ -165,6 +198,9 @@ func defaultChatCredential(provider string) (string, error) {
 }
 
 func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.ProviderClient, credentialResolver chat.CredentialResolver) error {
+	ctx, stopNotify := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopNotify()
+
 	store, err := chat.OpenSessionStore("")
 	if err != nil {
 		return err
@@ -220,6 +256,7 @@ func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.Provider
 			session = updated
 		}
 	}
+
 	query, querySet, err := loadChatQuery(options)
 	if err != nil {
 		return err
@@ -227,13 +264,64 @@ func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.Provider
 	if cmd.Flags().Changed("query") && options.queryFile == "" {
 		querySet = true
 	}
+
+	effectiveNoMCP := options.noMCP || noMCP
+	effectiveMCPConfig := options.mcpConfig
+	if effectiveMCPConfig == "" {
+		effectiveMCPConfig = mcpConfigFile
+	}
+
+	var mcpSession *chat.ACPSessionMCP
+	toolRegistry := chat.NewToolRegistry()
+	if !effectiveNoMCP {
+		targetPath, isWorkspace, err := chat.DiscoverMCPConfigFile("", effectiveMCPConfig)
+		if err != nil {
+			return err
+		}
+		if targetPath != "" {
+			allowWorkspace := true
+			if isWorkspace {
+				if querySet || !term.IsTerminal(int(os.Stdin.Fd())) {
+					allowWorkspace = false
+				} else {
+					allowWorkspace = promptWorkspaceMCPTrust(cmd.InOrStdin(), cmd.OutOrStdout(), targetPath)
+				}
+			}
+			if allowWorkspace {
+				configs, err := chat.DiscoverMCPConfig("", targetPath)
+				if err != nil {
+					return err
+				}
+				if len(configs) > 0 {
+					cwd, _ := os.Getwd()
+					session, err := chat.NewACPSessionMCP(configs, cwd)
+					if err != nil {
+						return err
+					}
+					mcpSession = session
+					toolRegistry = mcpSession.ToolRegistry(toolRegistry)
+				}
+			}
+		}
+	}
+	mcpState := &chatMCPState{
+		session:    mcpSession,
+		tools:      toolRegistry,
+		configPath: effectiveMCPConfig,
+	}
+	defer func() {
+		if mcpState != nil && mcpState.session != nil {
+			mcpState.session.Close()
+		}
+	}()
+
 	if querySet {
 		stream := !options.noStream
-		turnOptions := chat.TurnOptions{Stream: stream, ToolRegistry: chat.NewToolRegistry()}
+		turnOptions := chat.TurnOptions{Stream: stream, ToolRegistry: mcpState.tools}
 		if stream {
 			turnOptions.OnDelta = func(delta string) { _, _ = io.WriteString(cmd.OutOrStdout(), delta) }
 		}
-		assistant, err := chat.RunTurn(context.Background(), store, session.ID, query, provider, model, apiKey, client, turnOptions)
+		assistant, err := chat.RunTurn(ctx, store, session.ID, query, provider, model, apiKey, client, turnOptions)
 		if err != nil {
 			if stream {
 				fmt.Fprintln(cmd.OutOrStdout())
@@ -254,7 +342,7 @@ func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.Provider
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return errors.New("interactive chat requires a TTY; pass -q/--query or --query-file")
 	}
-	return runInteractiveChat(cmd, store, session, provider, model, apiKey, client, options.noStream)
+	return runInteractiveChat(cmd, store, session, provider, model, apiKey, client, options.noStream, mcpState)
 }
 
 func openOrResumeSession(store *chat.SessionStore, options chatOptionsValue) (*chat.Session, int, error) {
@@ -447,7 +535,7 @@ func loadChatQuery(options chatOptionsValue) (string, bool, error) {
 	return "", false, nil
 }
 
-func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *chat.Session, provider, model, apiKey string, client *chat.ProviderClient, noStream bool) error {
+func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *chat.Session, provider, model, apiKey string, client *chat.ProviderClient, noStream bool, mcpState *chatMCPState) error {
 	status, err := chat.GetSessionStatus(store, session.ID)
 	if err != nil {
 		return err
@@ -476,7 +564,7 @@ func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *c
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		if handled, exit := handleChatSlash(cmd, store, session, &model, provider, apiKey, client, line); handled {
+		if handled, exit := handleChatSlash(cmd, store, session, &model, provider, apiKey, client, line, mcpState); handled {
 			if exit {
 				return nil
 			}
@@ -488,7 +576,11 @@ func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *c
 			text string
 			err  error
 		}, 1)
-		turnOptions := chat.TurnOptions{Stream: !noStream, ToolRegistry: chat.NewToolRegistry()}
+		activeRegistry := chat.NewToolRegistry()
+		if mcpState != nil && mcpState.tools != nil {
+			activeRegistry = mcpState.tools
+		}
+		turnOptions := chat.TurnOptions{Stream: !noStream, ToolRegistry: activeRegistry}
 		if !noStream {
 			turnOptions.OnDelta = func(delta string) { _, _ = io.WriteString(cmd.OutOrStdout(), delta) }
 		}
@@ -553,7 +645,7 @@ func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *c
 	}
 }
 
-func handleChatSlash(cmd *cobra.Command, store *chat.SessionStore, session *chat.Session, model *string, provider, apiKey string, client *chat.ProviderClient, line string) (bool, bool) {
+func handleChatSlash(cmd *cobra.Command, store *chat.SessionStore, session *chat.Session, model *string, provider, apiKey string, client *chat.ProviderClient, line string, mcpState *chatMCPState) (bool, bool) {
 	text := strings.TrimSpace(line)
 	if !strings.HasPrefix(text, "/") {
 		return false, false
@@ -689,6 +781,94 @@ func handleChatSlash(cmd *cobra.Command, store *chat.SessionStore, session *chat
 			break
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), "system prompt updated")
+	case "mcp":
+		subcmd := strings.ToLower(argument)
+		switch subcmd {
+		case "", "list":
+			if mcpState == nil || mcpState.session == nil || len(mcpState.session.ServerStatuses()) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "No MCP servers configured.")
+				break
+			}
+			for _, st := range mcpState.session.ServerStatuses() {
+				fmt.Fprintf(cmd.OutOrStdout(), "  %s  %s  %s\n", st.Name, st.Command, st.State)
+			}
+		case "tools":
+			if mcpState == nil || mcpState.session == nil {
+				fmt.Fprintln(cmd.OutOrStdout(), "No active MCP tools.")
+				break
+			}
+			tools, err := mcpState.session.Tools(context.Background())
+			if err != nil || len(tools) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "No active MCP tools.")
+				break
+			}
+			for _, tool := range tools {
+				if tool.Description != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "  %s: %s\n", tool.Name, tool.Description)
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", tool.Name)
+				}
+			}
+		case "reload":
+			configPath := ""
+			if mcpState != nil {
+				configPath = mcpState.configPath
+			}
+			targetPath, isWorkspace, err := chat.DiscoverMCPConfigFile("", configPath)
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "error: MCP reload discovery failed: %v\n", err)
+				break
+			}
+			if targetPath == "" {
+				if mcpState != nil {
+					if mcpState.session != nil {
+						mcpState.session.Close()
+						mcpState.session = nil
+					}
+					mcpState.tools = chat.NewToolRegistry()
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "MCP reloaded: 0 servers configured.")
+				break
+			}
+			if isWorkspace {
+				if !promptWorkspaceMCPTrust(cmd.InOrStdin(), cmd.OutOrStdout(), targetPath) {
+					fmt.Fprintln(cmd.OutOrStdout(), "Workspace MCP configuration untrusted; reload cancelled.")
+					break
+				}
+			}
+			configs, err := chat.DiscoverMCPConfig("", targetPath)
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "error: MCP reload discovery failed: %v\n", err)
+				break
+			}
+			if len(configs) == 0 {
+				if mcpState != nil {
+					if mcpState.session != nil {
+						mcpState.session.Close()
+						mcpState.session = nil
+					}
+					mcpState.tools = chat.NewToolRegistry()
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "MCP reloaded: 0 servers configured.")
+				break
+			}
+			cwd, _ := os.Getwd()
+			newSession, err := chat.NewACPSessionMCP(configs, cwd)
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "error: MCP reload connection failed: %v\n", err)
+				break
+			}
+			if mcpState != nil {
+				if mcpState.session != nil {
+					mcpState.session.Close()
+				}
+				mcpState.session = newSession
+				mcpState.tools = newSession.ToolRegistry(chat.NewToolRegistry())
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "MCP reloaded: %d server(s) active.\n", len(configs))
+		default:
+			fmt.Fprintln(cmd.ErrOrStderr(), "usage: /mcp [list|tools|reload]")
+		}
 	default:
 		fmt.Fprintf(cmd.ErrOrStderr(), "unknown command: /%s (try /help)\n", name)
 	}
