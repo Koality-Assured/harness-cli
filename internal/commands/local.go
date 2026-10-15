@@ -13,9 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/spf13/cobra"
 )
@@ -280,48 +278,6 @@ func probeNvidiaGPU() (*string, *float64) {
 	return &name, &vramGB
 }
 
-func probeSystemRAM() *float64 {
-	if runtime.GOOS == "windows" {
-		kernel32 := syscall.NewLazyDLL("kernel32.dll")
-		proc := kernel32.NewProc("GlobalMemoryStatusEx")
-		if proc != nil && proc.Find() == nil {
-			type memorystatusex struct {
-				length                uint32
-				memoryLoad            uint32
-				totalPhys             uint64
-				availPhys             uint64
-				totalPageFile         uint64
-				availPageFile         uint64
-				totalVirtual          uint64
-				availVirtual          uint64
-				availExtendedVirtual  uint64
-			}
-			var mem memorystatusex
-			mem.length = uint32(unsafe.Sizeof(mem))
-			ret, _, _ := proc.Call(uintptr(unsafe.Pointer(&mem)))
-			if ret != 0 && mem.totalPhys > 0 {
-				gb := math.Round((float64(mem.totalPhys)/(1024*1024*1024))*10) / 10
-				return &gb
-			}
-		}
-	} else if runtime.GOOS == "linux" {
-		data, err := os.ReadFile("/proc/meminfo")
-		if err == nil {
-			for _, line := range strings.Split(string(data), "\n") {
-				if strings.HasPrefix(line, "MemTotal:") {
-					fields := strings.Fields(line)
-					if len(fields) >= 2 {
-						if kb, err := strconv.ParseFloat(fields[1], 64); err == nil {
-							gb := math.Round((kb/(1024*1024))*10) / 10
-							return &gb
-						}
-					}
-				}
-			}
-		}
-	}
-	return nil
-}
 
 func runLocalOnboarding(cmd *cobra.Command, _ []string) error {
 	baseURL, err := resolveLocalBaseURL()

@@ -223,11 +223,6 @@ func TestChatLocalProviderTurn(t *testing.T) {
 	}
 }
 
-type fakeHTTPDoerFunc func(*http.Request) (*http.Response, error)
-
-func (f fakeHTTPDoerFunc) Do(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
 
 func (f *fakeChatTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f.Do(req)
