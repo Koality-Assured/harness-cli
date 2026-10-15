@@ -13,7 +13,13 @@ import (
 
 func TestResolveWorkspacePath(t *testing.T) {
 	wsDir := t.TempDir()
+	if realWs, err := filepath.EvalSymlinks(wsDir); err == nil {
+		wsDir = realWs
+	}
 	outsideDir := t.TempDir()
+	if realOutside, err := filepath.EvalSymlinks(outsideDir); err == nil {
+		outsideDir = realOutside
+	}
 
 	// 1. Valid file in root
 	relPath := "file.txt"
