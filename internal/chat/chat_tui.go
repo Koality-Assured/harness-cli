@@ -660,7 +660,9 @@ func (s *ChatTUISession) readInteractiveTerminalLine(file *os.File, prompt strin
 	if err != nil {
 		return s.readPlainLine(prompt)
 	}
-	defer term.Restore(int(file.Fd()), oldState)
+	defer func() {
+		_ = term.Restore(int(file.Fd()), oldState)
+	}()
 
 	fmt.Fprint(s.out, prompt)
 
