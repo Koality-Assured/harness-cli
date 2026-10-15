@@ -237,5 +237,11 @@ func AskQuestionToolDefinition(isInteractive bool, in io.Reader, out io.Writer) 
 // RegisterAskQuestionTool registers ask_question into the provided ToolRegistry.
 func RegisterAskQuestionTool(registry *ToolRegistry, isInteractive bool, in io.Reader, out io.Writer) error {
 	def := AskQuestionToolDefinition(isInteractive, in, out)
+	if registry != nil && registry.tools != nil {
+		if _, exists := registry.tools[def.Name]; exists {
+			registry.tools[def.Name] = def
+			return nil
+		}
+	}
 	return registry.Register(def.Name, def.Description, def.InputSchema, def.Handler)
 }
