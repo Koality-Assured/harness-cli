@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -25,6 +26,11 @@ import (
 
 var chatOptions chatOptionsValue
 
+var (
+	thinkingFlag string
+	effortFlag   string
+)
+
 var chatCmd = &cobra.Command{
 	Use:          "chat",
 	Short:        "One-shot or interactive agent conversation",
@@ -33,6 +39,8 @@ var chatCmd = &cobra.Command{
 		opts := chatOptions
 		opts.mcpConfig = mcpConfigFile
 		opts.noMCP = noMCP
+		opts.thinking = thinkingFlag
+		opts.effort = effortFlag
 		return runChat(cmd, opts, nil, defaultChatCredential)
 	},
 }
@@ -111,6 +119,15 @@ type chatOptionsValue struct {
 	files           []string
 	mcpConfig       string
 	noMCP           bool
+	thinking        string
+	effort          string
+}
+
+// SlashOptions carries state for slash command inspection and mutation.
+type SlashOptions struct {
+	Thinking       *string
+	Effort         *string
+	AutoCompactPct **float64
 }
 
 type chatMCPState struct {
@@ -132,7 +149,7 @@ var builtinCommands = []chatCommandDef{
 	{"compact", "Summarize middle turns into a new session"},
 	{"context", "Show context usage and configure auto-compaction (usage: /context [auto-compact <pct>])"},
 	{"thinking", "Show or set thinking/reasoning budget (usage: /thinking off|low|medium|high|<budget>)"},
-	{"effort", "Show or set reasoning effort (usage: /effort low|medium|high)"},
+	{"effort", "Show or set reasoning effort (usage: /effort low|medium|high|off)"},
 	{"title", "Rename the active session (usage: /title <text>)"},
 	{"busy", "Show or set busy input mode: interrupt, queue, or steer"},
 	{"preset", "Show or switch system preset (usage: /preset <name>)"},
@@ -150,6 +167,8 @@ var (
 func resetChatFlags() {
 	mcpConfigFile = ""
 	noMCP = false
+	thinkingFlag = ""
+	effortFlag = ""
 	chatOptions = chatOptionsValue{}
 }
 
@@ -176,6 +195,8 @@ func init() {
 	chatCmd.Flags().StringSliceVarP(&chatOptions.files, "file", "f", nil, "Context file(s) to prepend to the user message")
 	chatCmd.Flags().StringVar(&mcpConfigFile, "mcp-config", "", "Path to MCP server configuration JSON")
 	chatCmd.Flags().BoolVar(&noMCP, "no-mcp", false, "Disable MCP server discovery and integration for this chat session")
+	chatCmd.Flags().StringVar(&thinkingFlag, "thinking", "", "Thinking budget in tokens (integer) or effort level ('off', 'low', 'medium', 'high')")
+	chatCmd.Flags().StringVar(&effortFlag, "effort", "", "Reasoning effort level ('low', 'medium', 'high')")
 	sessionsCmd.AddCommand(sessionsListCmd, sessionsRenameCmd, sessionsSearchCmd)
 }
 
@@ -317,7 +338,14 @@ func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.Provider
 
 	if querySet {
 		stream := !options.noStream
-		turnOptions := chat.TurnOptions{Stream: stream, ToolRegistry: mcpState.tools}
+		budget, effort := chat.ResolveThinking(0, options.effort, options.thinking)
+		turnOptions := chat.TurnOptions{
+			Stream:          stream,
+			ToolRegistry:    mcpState.tools,
+			ThinkingBudget:  budget,
+			ReasoningEffort: effort,
+			Thinking:        options.thinking,
+		}
 		if stream {
 			turnOptions.OnDelta = func(delta string) { _, _ = io.WriteString(cmd.OutOrStdout(), delta) }
 		}
@@ -342,7 +370,7 @@ func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.Provider
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return errors.New("interactive chat requires a TTY; pass -q/--query or --query-file")
 	}
-	return runInteractiveChat(cmd, store, session, provider, model, apiKey, client, options.noStream, mcpState)
+	return runInteractiveChat(cmd, store, session, provider, model, apiKey, client, options.noStream, mcpState, options.thinking, options.effort)
 }
 
 func openOrResumeSession(store *chat.SessionStore, options chatOptionsValue) (*chat.Session, int, error) {
@@ -535,7 +563,11 @@ func loadChatQuery(options chatOptionsValue) (string, bool, error) {
 	return "", false, nil
 }
 
-func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *chat.Session, provider, model, apiKey string, client *chat.ProviderClient, noStream bool, mcpState *chatMCPState) error {
+func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *chat.Session, provider, model, apiKey string, client *chat.ProviderClient, noStream bool, mcpState *chatMCPState, initialThinking, initialEffort string) error {
+	thinkingVal := initialThinking
+	effortVal := initialEffort
+	var autoCompactPct *float64
+
 	status, err := chat.GetSessionStatus(store, session.ID)
 	if err != nil {
 		return err
@@ -564,7 +596,12 @@ func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *c
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		if handled, exit := handleChatSlash(cmd, store, session, &model, provider, apiKey, client, line, mcpState); handled {
+		slashOpts := &SlashOptions{
+			Thinking:       &thinkingVal,
+			Effort:         &effortVal,
+			AutoCompactPct: &autoCompactPct,
+		}
+		if handled, exit := handleChatSlash(cmd, store, session, &model, provider, apiKey, client, line, mcpState, slashOpts); handled {
 			if exit {
 				return nil
 			}
@@ -580,7 +617,14 @@ func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *c
 		if mcpState != nil && mcpState.tools != nil {
 			activeRegistry = mcpState.tools
 		}
-		turnOptions := chat.TurnOptions{Stream: !noStream, ToolRegistry: activeRegistry}
+		budget, effort := chat.ResolveThinking(0, effortVal, thinkingVal)
+		turnOptions := chat.TurnOptions{
+			Stream:          !noStream,
+			ToolRegistry:    activeRegistry,
+			ThinkingBudget:  budget,
+			ReasoningEffort: effort,
+			Thinking:        thinkingVal,
+		}
 		if !noStream {
 			turnOptions.OnDelta = func(delta string) { _, _ = io.WriteString(cmd.OutOrStdout(), delta) }
 		}
@@ -636,6 +680,12 @@ func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *c
 		} else {
 			fmt.Fprintln(cmd.OutOrStdout())
 		}
+		if autoCompactPct != nil {
+			st, err := chat.GetSessionStatus(store, session.ID)
+			if err == nil && st.ContextPct >= *autoCompactPct {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: context usage (%.1f%%) reached auto-compact threshold (%.1f%%); run /compact to summarize middle turns\n", st.ContextPct, *autoCompactPct)
+			}
+		}
 		busyMode := session.BusyMode
 		if busyMode == "queue" {
 			pending = append(pending, pump.takeAvailable(-1)...)
@@ -645,7 +695,17 @@ func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *c
 	}
 }
 
-func handleChatSlash(cmd *cobra.Command, store *chat.SessionStore, session *chat.Session, model *string, provider, apiKey string, client *chat.ProviderClient, line string, mcpState *chatMCPState) (bool, bool) {
+func handleChatSlash(cmd *cobra.Command, store *chat.SessionStore, session *chat.Session, model *string, provider, apiKey string, client *chat.ProviderClient, line string, mcpState *chatMCPState, extra ...any) (bool, bool) {
+	var thinkingHolder *string
+	var effortHolder *string
+	var autoCompactHolder **float64
+	for _, item := range extra {
+		if opt, ok := item.(*SlashOptions); ok && opt != nil {
+			thinkingHolder = opt.Thinking
+			effortHolder = opt.Effort
+			autoCompactHolder = opt.AutoCompactPct
+		}
+	}
 	text := strings.TrimSpace(line)
 	if !strings.HasPrefix(text, "/") {
 		return false, false
@@ -670,6 +730,25 @@ func handleChatSlash(cmd *cobra.Command, store *chat.SessionStore, session *chat
 			break
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), formatChatStatus(status, *model))
+		inputTokens := int64(0)
+		outputTokens := int64(0)
+		if v, ok := status.InputTokens.(int64); ok {
+			inputTokens = v
+		} else if v, ok := status.InputTokens.(int); ok {
+			inputTokens = int64(v)
+		}
+		if v, ok := status.OutputTokens.(int64); ok {
+			outputTokens = v
+		} else if v, ok := status.OutputTokens.(int); ok {
+			outputTokens = int64(v)
+		}
+		totalTokens := inputTokens + outputTokens
+		fmt.Fprintf(cmd.OutOrStdout(), "tokens: active=%d / %d (%.1f%%) | cumulative: input=%d output=%d total=%d cost=$%.4f\n",
+			status.ActiveTokens, status.ContextWindow, status.ContextPct, inputTokens, outputTokens, totalTokens, status.Cost)
+		if autoCompactHolder != nil && *autoCompactHolder != nil && status.ContextPct >= **autoCompactHolder {
+			fmt.Fprintf(cmd.OutOrStdout(), "warning: context usage (%.1f%%) reached auto-compact threshold (%.1f%%); run /compact to summarize middle turns\n",
+				status.ContextPct, **autoCompactHolder)
+		}
 	case "model":
 		if argument != "" {
 			*model = argument
@@ -709,6 +788,167 @@ func handleChatSlash(cmd *cobra.Command, store *chat.SessionStore, session *chat
 		*session = result.Session
 		*model = session.Model
 		fmt.Fprintf(cmd.OutOrStdout(), "compacted %d middle turn(s) from %s; active session=%s\n", result.CompactedTurns, oldID, session.ID)
+	case "context":
+		var autoCompactPct *float64
+		if autoCompactHolder != nil {
+			autoCompactPct = *autoCompactHolder
+		}
+		if argument == "" {
+			status, err := chat.GetSessionStatus(store, session.ID)
+			if err != nil {
+				fmt.Fprintln(cmd.ErrOrStderr(), err)
+				break
+			}
+			inputTokens := int64(0)
+			outputTokens := int64(0)
+			if v, ok := status.InputTokens.(int64); ok {
+				inputTokens = v
+			} else if v, ok := status.InputTokens.(int); ok {
+				inputTokens = int64(v)
+			}
+			if v, ok := status.OutputTokens.(int64); ok {
+				outputTokens = v
+			} else if v, ok := status.OutputTokens.(int); ok {
+				outputTokens = int64(v)
+			}
+			totalTokens := inputTokens + outputTokens
+			acStr := "disabled"
+			if autoCompactPct != nil {
+				acStr = fmt.Sprintf("%.1f%%", *autoCompactPct)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "tokens: active=%d / %d (%.1f%%) | cumulative: input=%d output=%d total=%d cost=$%.4f auto_compact=%s\n",
+				status.ActiveTokens, status.ContextWindow, status.ContextPct, inputTokens, outputTokens, totalTokens, status.Cost, acStr)
+			if autoCompactPct != nil && status.ContextPct >= *autoCompactPct {
+				fmt.Fprintf(cmd.OutOrStdout(), "warning: context usage (%.1f%%) reached auto-compact threshold (%.1f%%); run /compact to summarize middle turns\n",
+					status.ContextPct, *autoCompactPct)
+			}
+			return true, false
+		}
+		parts := strings.Fields(argument)
+		if strings.EqualFold(parts[0], "auto-compact") {
+			if len(parts) == 1 {
+				acStr := "disabled"
+				if autoCompactPct != nil {
+					acStr = fmt.Sprintf("%.1f%%", *autoCompactPct)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "auto_compact=%s\n", acStr)
+				return true, false
+			}
+			if len(parts) > 2 {
+				fmt.Fprintln(cmd.ErrOrStderr(), "usage: /context [auto-compact <pct>]")
+				return true, false
+			}
+			pctVal := strings.TrimSuffix(parts[1], "%")
+			pctLower := strings.ToLower(pctVal)
+			if pctLower == "off" || pctLower == "none" || pctLower == "0" || pctLower == "disable" || pctLower == "disabled" {
+				if autoCompactHolder != nil {
+					*autoCompactHolder = nil
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "auto-compact disabled")
+				return true, false
+			}
+			parsedPct, err := strconv.ParseFloat(pctVal, 64)
+			if err != nil || parsedPct <= 0.0 || parsedPct > 100.0 {
+				fmt.Fprintln(cmd.ErrOrStderr(), "usage: /context [auto-compact <pct>]")
+				return true, false
+			}
+			if autoCompactHolder != nil {
+				*autoCompactHolder = &parsedPct
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "auto-compact threshold set to %.1f%%\n", parsedPct)
+			return true, false
+		}
+		fmt.Fprintln(cmd.ErrOrStderr(), "usage: /context [auto-compact <pct>]")
+		return true, false
+	case "thinking":
+		var current string
+		if thinkingHolder != nil && *thinkingHolder != "" {
+			current = *thinkingHolder
+		}
+		if argument == "" {
+			if current == "" || strings.EqualFold(current, "off") {
+				fmt.Fprintln(cmd.OutOrStdout(), "thinking=off")
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "thinking=%s\n", current)
+			}
+			return true, false
+		}
+		val := strings.ToLower(strings.TrimSpace(argument))
+		if val == "off" || val == "none" || val == "0" {
+			if thinkingHolder != nil {
+				*thinkingHolder = "off"
+			}
+			if effortHolder != nil {
+				*effortHolder = "off"
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "thinking set to off")
+			return true, false
+		}
+		if val == "low" || val == "medium" || val == "high" {
+			if thinkingHolder != nil {
+				*thinkingHolder = val
+			}
+			if effortHolder != nil {
+				*effortHolder = val
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "thinking set to %s\n", val)
+			return true, false
+		}
+		if budget, err := strconv.Atoi(val); err == nil && budget > 0 {
+			if thinkingHolder != nil {
+				*thinkingHolder = strconv.Itoa(budget)
+			}
+			if effortHolder != nil {
+				if budget <= 2048 {
+					*effortHolder = "low"
+				} else if budget <= 8192 {
+					*effortHolder = "medium"
+				} else {
+					*effortHolder = "high"
+				}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "thinking set to %d\n", budget)
+			return true, false
+		}
+		fmt.Fprintln(cmd.ErrOrStderr(), "usage: /thinking off|low|medium|high|<budget>")
+		return true, false
+	case "effort":
+		var current string
+		if effortHolder != nil && *effortHolder != "" {
+			current = *effortHolder
+		}
+		if argument == "" {
+			if current == "" {
+				fmt.Fprintln(cmd.OutOrStdout(), "effort=(unset)")
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "effort=%s\n", current)
+			}
+			return true, false
+		}
+		val := strings.ToLower(strings.TrimSpace(argument))
+		if val == "low" || val == "medium" || val == "high" {
+			effortMap := map[string]int{"low": 2048, "medium": 8192, "high": 16384}
+			if effortHolder != nil {
+				*effortHolder = val
+			}
+			if thinkingHolder != nil {
+				*thinkingHolder = strconv.Itoa(effortMap[val])
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "effort set to %s\n", val)
+			return true, false
+		}
+		if val == "off" || val == "none" || val == "0" {
+			if effortHolder != nil {
+				*effortHolder = "off"
+			}
+			if thinkingHolder != nil {
+				*thinkingHolder = "off"
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "effort set to off")
+			return true, false
+		}
+		fmt.Fprintln(cmd.ErrOrStderr(), "usage: /effort low|medium|high|off")
+		return true, false
 	case "title":
 		if argument == "" {
 			fmt.Fprintln(cmd.ErrOrStderr(), "usage: /title <text>")
@@ -894,7 +1134,7 @@ func formatChatStatus(status chat.SessionStatus, model string) string {
 	if model == "" {
 		model = status.Model
 	}
-	return fmt.Sprintf("session=%s provider=%s model=%s messages=%d input_tokens=%s output_tokens=%s cost=n/a", status.SessionID, status.Provider, model, status.MessageCount, input, output)
+	return fmt.Sprintf("session=%s provider=%s model=%s messages=%d input_tokens=%s output_tokens=%s cost=$%.4f", status.SessionID, status.Provider, model, status.MessageCount, input, output, status.Cost)
 }
 
 func firstChatValue(values ...string) string {

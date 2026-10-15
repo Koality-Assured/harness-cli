@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 )
 
@@ -16,14 +17,17 @@ const MaxToolRequestRounds = maxToolRequestRounds
 // TurnCancelled marks a turn stopped at a provider or tool boundary.
 var TurnCancelled = errors.New("turn cancelled")
 
-// TurnOptions controls streaming, tool dispatch, and observable tool events.
+// TurnOptions controls streaming, tool dispatch, reasoning, and observable tool events.
 type TurnOptions struct {
-	Stream         bool
-	OnDelta        func(string)
-	ToolRegistry   ToolDispatcher
-	OnToolBatch    func() string
-	OnToolStart    func(id, name string, arguments map[string]any)
-	OnToolComplete func(id, name string, arguments map[string]any, outcome ToolOutcome)
+	Stream          bool
+	OnDelta         func(string)
+	ToolRegistry    ToolDispatcher
+	OnToolBatch     func() string
+	OnToolStart     func(id, name string, arguments map[string]any)
+	OnToolComplete  func(id, name string, arguments map[string]any, outcome ToolOutcome)
+	ThinkingBudget  int
+	ReasoningEffort string
+	Thinking        string
 }
 
 // RunTurn stores a user message, drives provider/tool rounds, and persists the
@@ -65,12 +69,12 @@ func RunTurn(ctx context.Context, store *SessionStore, sessionID, userText, prov
 		}
 		var result Completion
 		if options.Stream {
-			result, err = client.Stream(ctx, provider, model, messages, apiKey, tools, options.OnDelta)
+			result, err = client.Stream(ctx, provider, model, messages, apiKey, tools, options.OnDelta, options)
 			if errors.Is(err, ErrStreamCancelled) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return "", TurnCancelled
 			}
 		} else {
-			result, err = client.Complete(ctx, provider, model, messages, apiKey, tools)
+			result, err = client.Complete(ctx, provider, model, messages, apiKey, tools, options)
 		}
 		if err != nil {
 			return "", err
@@ -533,17 +537,20 @@ func decodeUniqueValue(decoder *json.Decoder) (any, error) {
 
 // SessionStatus is the usage and runtime summary shown by /status.
 type SessionStatus struct {
-	SessionID    string `json:"session_id"`
-	Title        string `json:"title"`
-	CWD          string `json:"cwd"`
-	Provider     string `json:"provider"`
-	Model        string `json:"model"`
-	MessageCount int    `json:"message_count"`
-	InputTokens  any    `json:"input_tokens"`
-	OutputTokens any    `json:"output_tokens"`
-	BusyMode     string `json:"busy_mode"`
-	Cost         any    `json:"cost"`
-	UpdatedAt    string `json:"updated_at"`
+	SessionID     string  `json:"session_id"`
+	Title         string  `json:"title"`
+	CWD           string  `json:"cwd"`
+	Provider      string  `json:"provider"`
+	Model         string  `json:"model"`
+	MessageCount  int     `json:"message_count"`
+	InputTokens   any     `json:"input_tokens"`
+	OutputTokens  any     `json:"output_tokens"`
+	ActiveTokens  int64   `json:"active_tokens"`
+	BusyMode      string  `json:"busy_mode"`
+	ContextWindow int     `json:"context_window"`
+	ContextPct    float64 `json:"context_pct"`
+	Cost          float64 `json:"cost"`
+	UpdatedAt     string  `json:"updated_at"`
 }
 
 func GetSessionStatus(store *SessionStore, sessionID string) (SessionStatus, error) {
@@ -558,29 +565,77 @@ func GetSessionStatus(store *SessionStore, sessionID string) (SessionStatus, err
 	if err != nil {
 		return SessionStatus{}, err
 	}
-	var input, output int64
+	var activeInput, activeOutput int64
+	var carriedInput, carriedOutput int64
 	hasUsage, carriedKnown := false, false
 	for _, message := range messages {
 		if message.InputTokens != nil {
-			input += *message.InputTokens
+			activeInput += *message.InputTokens
 			hasUsage = true
 		}
 		if message.OutputTokens != nil {
-			output += *message.OutputTokens
+			activeOutput += *message.OutputTokens
 			hasUsage = true
 		}
-		carriedInput, carriedOutput, known := checkpointUsage(message.ProviderData)
-		input += carriedInput
-		output += carriedOutput
+		cIn, cOut, known := checkpointUsage(message.ProviderData)
+		carriedInput += cIn
+		carriedOutput += cOut
 		carriedKnown = carriedKnown || known
 	}
-	status := SessionStatus{
-		SessionID: session.ID, Title: session.Title, CWD: session.CWD, Provider: session.Provider,
-		Model: session.Model, MessageCount: len(messages), BusyMode: session.BusyMode,
-		Cost: nil, UpdatedAt: session.UpdatedAt,
+
+	var latestInput, latestOutput int64
+	var foundLatest bool
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.InputTokens != nil || msg.OutputTokens != nil {
+			if msg.InputTokens != nil {
+				latestInput = *msg.InputTokens
+			}
+			if msg.OutputTokens != nil {
+				latestOutput = *msg.OutputTokens
+			}
+			foundLatest = true
+			break
+		}
 	}
-	if hasUsage || carriedKnown {
-		status.InputTokens, status.OutputTokens = input, output
+
+	cumulativeInput := activeInput + carriedInput
+	cumulativeOutput := activeOutput + carriedOutput
+	hasUsage = hasUsage || carriedKnown
+
+	contextWindow := GetContextWindow(session.Model, session.Provider)
+	var contextPct float64
+	var cost float64
+	var workingTokens int64
+
+	if hasUsage && contextWindow > 0 {
+		if foundLatest {
+			workingTokens = latestInput + latestOutput
+		} else {
+			workingTokens = activeInput + activeOutput
+		}
+		contextPct = math.Round((float64(workingTokens)/float64(contextWindow)*100.0)*100.0) / 100.0
+	}
+	if hasUsage {
+		cost = CalculateTokenCost(session.Provider, session.Model, int(cumulativeInput), int(cumulativeOutput))
+	}
+
+	status := SessionStatus{
+		SessionID:     session.ID,
+		Title:         session.Title,
+		CWD:           session.CWD,
+		Provider:      session.Provider,
+		Model:         session.Model,
+		MessageCount:  len(messages),
+		BusyMode:      session.BusyMode,
+		ContextWindow: contextWindow,
+		ContextPct:    contextPct,
+		Cost:          cost,
+		UpdatedAt:     session.UpdatedAt,
+	}
+	if hasUsage {
+		status.InputTokens, status.OutputTokens = cumulativeInput, cumulativeOutput
+		status.ActiveTokens = workingTokens
 	}
 	return status, nil
 }

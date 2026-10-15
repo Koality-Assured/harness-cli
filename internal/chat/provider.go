@@ -112,7 +112,7 @@ func resolveModel(provider, model string) (string, error) {
 	return "", &ProviderError{Provider: provider, Message: provider + " requires --model"}
 }
 
-func (c *ProviderClient) Complete(ctx context.Context, provider, model string, messages []Message, apiKey string, tools []ToolDefinition) (Completion, error) {
+func (c *ProviderClient) Complete(ctx context.Context, provider, model string, messages []Message, apiKey string, tools []ToolDefinition, opts ...TurnOptions) (Completion, error) {
 	canonical, ok := NormalizeProvider(provider)
 	if !ok || canonical == "cursor" {
 		if canonical == "cursor" {
@@ -124,7 +124,7 @@ func (c *ProviderClient) Complete(ctx context.Context, provider, model string, m
 	if err != nil {
 		return Completion{}, err
 	}
-	endpoint, headers, payload, err := buildRequest(canonical, resolved, messages, apiKey, tools, false)
+	endpoint, headers, payload, err := buildRequest(canonical, resolved, messages, apiKey, tools, false, opts...)
 	if err != nil {
 		return Completion{}, err
 	}
@@ -158,7 +158,7 @@ func (c *ProviderClient) Complete(ctx context.Context, provider, model string, m
 }
 
 // Stream emits text deltas and returns only after the provider's final stream event is assembled.
-func (c *ProviderClient) Stream(ctx context.Context, provider, model string, messages []Message, apiKey string, tools []ToolDefinition, onDelta func(string)) (Completion, error) {
+func (c *ProviderClient) Stream(ctx context.Context, provider, model string, messages []Message, apiKey string, tools []ToolDefinition, onDelta func(string), opts ...TurnOptions) (Completion, error) {
 	canonical, ok := NormalizeProvider(provider)
 	if !ok || canonical == "cursor" {
 		if canonical == "cursor" {
@@ -170,7 +170,7 @@ func (c *ProviderClient) Stream(ctx context.Context, provider, model string, mes
 	if err != nil {
 		return Completion{}, err
 	}
-	endpoint, headers, payload, err := buildRequest(canonical, resolved, messages, apiKey, tools, true)
+	endpoint, headers, payload, err := buildRequest(canonical, resolved, messages, apiKey, tools, true, opts...)
 	if err != nil {
 		return Completion{}, err
 	}
@@ -196,12 +196,33 @@ func (c *ProviderClient) Stream(ctx context.Context, provider, model string, mes
 	return readStream(ctx, canonical, response.Body, apiKey, onDelta)
 }
 
-func buildRequest(provider, model string, messages []Message, apiKey string, tools []ToolDefinition, stream bool) (string, map[string]string, []byte, error) {
+func buildRequest(provider, model string, messages []Message, apiKey string, tools []ToolDefinition, stream bool, opts ...TurnOptions) (string, map[string]string, []byte, error) {
 	headers := map[string]string{"content-type": "application/json"}
+	var opt TurnOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+	budget, effort := ResolveThinking(opt.ThinkingBudget, opt.ReasoningEffort, opt.Thinking)
 	var payload map[string]any
 	switch provider {
 	case "anthropic":
 		payload = map[string]any{"model": model, "max_tokens": 4096, "messages": messagesForAnthropic(messages)}
+		if budget > 0 {
+			effectiveBudget := budget
+			if effectiveBudget < 1024 {
+				effectiveBudget = 1024
+			}
+			payload["thinking"] = map[string]any{
+				"type":          "enabled",
+				"budget_tokens": effectiveBudget,
+			}
+			maxTokens := 4096
+			if effectiveBudget+1024 > maxTokens {
+				maxTokens = effectiveBudget + 1024
+			}
+			payload["max_tokens"] = maxTokens
+			delete(payload, "temperature")
+		}
 		if system := systemFromMessages(messages); system != "" {
 			payload["system"] = system
 		}
@@ -220,6 +241,9 @@ func buildRequest(provider, model string, messages []Message, apiKey string, too
 		return marshalRequest(endpoint, headers, payload)
 	case "openai":
 		payload = map[string]any{"model": model, "messages": messagesForOpenAI(messages)}
+		if effort != "" && IsOpenAIReasoningModel(model) {
+			payload["reasoning_effort"] = effort
+		}
 		if stream {
 			payload["stream"] = true
 			payload["stream_options"] = map[string]any{"include_usage": true}
@@ -250,6 +274,21 @@ func buildRequest(provider, model string, messages []Message, apiKey string, too
 		return marshalRequest(endpoint, headers, payload)
 	case "gemini":
 		payload = map[string]any{"contents": geminiContents(messages)}
+		if IsGeminiThinkingSupported(model) {
+			if budget > 0 {
+				payload["generationConfig"] = map[string]any{
+					"thinkingConfig": map[string]any{
+						"thinkingBudget": budget,
+					},
+				}
+			} else if strings.EqualFold(opt.Thinking, "off") || strings.EqualFold(opt.ReasoningEffort, "off") || strings.EqualFold(effort, "off") || opt.Thinking == "0" {
+				payload["generationConfig"] = map[string]any{
+					"thinkingConfig": map[string]any{
+						"thinkingBudget": 0,
+					},
+				}
+			}
+		}
 		if system := systemFromMessages(messages); system != "" {
 			payload["systemInstruction"] = map[string]any{"parts": []any{map[string]any{"text": system}}}
 		}
@@ -266,6 +305,11 @@ func buildRequest(provider, model string, messages []Message, apiKey string, too
 	default:
 		return "", nil, nil, fmt.Errorf("unsupported provider %q", provider)
 	}
+}
+
+// BuildRequest is the exported version of buildRequest for testing and external callers.
+func BuildRequest(provider, model string, messages []Message, apiKey string, tools []ToolDefinition, stream bool, opts ...TurnOptions) (string, map[string]string, []byte, error) {
+	return buildRequest(provider, model, messages, apiKey, tools, stream, opts...)
 }
 
 func localChatCompletionsEndpoint() (string, error) {
@@ -537,8 +581,10 @@ func decodeCompletion(provider string, data map[string]any) (Completion, error) 
 			var texts []string
 			for _, value := range parts {
 				part, _ := value.(map[string]any)
-				if text, ok := part["text"].(string); ok {
-					texts = append(texts, text)
+				if isThought, _ := part["thought"].(bool); !isThought {
+					if text, ok := part["text"].(string); ok {
+						texts = append(texts, text)
+					}
 				}
 				functionCall, _ := part["functionCall"].(map[string]any)
 				if functionCall != nil {
@@ -679,6 +725,24 @@ func readStream(ctx context.Context, provider string, source io.Reader, apiKey s
 							onDelta(text)
 						}
 					}
+				} else if delta["type"] == "thinking_delta" {
+					if thinkingText, ok := delta["thinking"].(string); ok && thinkingText != "" {
+						if indexOK {
+							if anthropicBlocks[index] == nil {
+								anthropicBlocks[index] = map[string]any{"type": "thinking"}
+							}
+							anthropicBlocks[index]["thinking"] = stringValue(anthropicBlocks[index]["thinking"]) + thinkingText
+						}
+					}
+				} else if delta["type"] == "signature_delta" {
+					if sig, ok := delta["signature"].(string); ok && sig != "" {
+						if indexOK {
+							if anthropicBlocks[index] == nil {
+								anthropicBlocks[index] = map[string]any{"type": "thinking"}
+							}
+							anthropicBlocks[index]["signature"] = sig
+						}
+					}
 				} else if delta["type"] == "input_json_delta" && indexOK {
 					if partial, ok := delta["partial_json"].(string); ok {
 						anthropicArguments[index] = append(anthropicArguments[index], partial)
@@ -765,16 +829,30 @@ func readStream(ctx context.Context, provider string, source io.Reader, apiKey s
 				if part == nil {
 					continue
 				}
-				existing := geminiParts[candidateIndex][partIndex]
+				isThought, _ := part["thought"].(bool)
+				targetIndex := partIndex
+				if existing := geminiParts[candidateIndex][targetIndex]; existing != nil {
+					if existingThought, _ := existing["thought"].(bool); existingThought && !isThought {
+						lastIdx := len(geminiParts[candidateIndex]) - 1
+						if lastIdx > targetIndex {
+							targetIndex = lastIdx
+						} else {
+							targetIndex = len(geminiParts[candidateIndex])
+						}
+					}
+				}
+				existing := geminiParts[candidateIndex][targetIndex]
 				if existing == nil {
 					existing = map[string]any{}
-					geminiParts[candidateIndex][partIndex] = existing
+					geminiParts[candidateIndex][targetIndex] = existing
 				}
 				if text, ok := part["text"].(string); ok && text != "" {
 					existing["text"] = stringValue(existing["text"]) + text
-					assembled.WriteString(text)
-					if onDelta != nil {
-						onDelta(text)
+					if !isThought {
+						assembled.WriteString(text)
+						if onDelta != nil {
+							onDelta(text)
+						}
 					}
 				}
 				if functionCall, ok := part["functionCall"].(map[string]any); ok {
