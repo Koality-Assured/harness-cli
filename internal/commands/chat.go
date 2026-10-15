@@ -31,6 +31,7 @@ var (
 	thinkingFlag    string
 	effortFlag      string
 	permissionsFlag string
+	noTools         bool
 )
 
 var chatCmd = &cobra.Command{
@@ -41,6 +42,7 @@ var chatCmd = &cobra.Command{
 		opts := chatOptions
 		opts.mcpConfig = mcpConfigFile
 		opts.noMCP = noMCP
+		opts.noTools = noTools
 		opts.thinking = thinkingFlag
 		opts.effort = effortFlag
 		if opts.permissions == "" && permissionsFlag != "" {
@@ -124,6 +126,7 @@ type chatOptionsValue struct {
 	files           []string
 	mcpConfig       string
 	noMCP           bool
+	noTools         bool
 	thinking        string
 	effort          string
 	permissions     string
@@ -141,6 +144,8 @@ type chatMCPState struct {
 	session    *chat.ACPSessionMCP
 	tools      *chat.ToolRegistry
 	configPath string
+	baseTools  *chat.ToolRegistry
+	noTools    bool
 }
 
 type chatCommandDef struct {
@@ -174,6 +179,7 @@ var (
 func resetChatFlags() {
 	mcpConfigFile = ""
 	noMCP = false
+	noTools = false
 	thinkingFlag = ""
 	effortFlag = ""
 	permissionsFlag = "ask"
@@ -203,6 +209,7 @@ func init() {
 	chatCmd.Flags().StringSliceVarP(&chatOptions.files, "file", "f", nil, "Context file(s) to prepend to the user message")
 	chatCmd.Flags().StringVar(&mcpConfigFile, "mcp-config", "", "Path to MCP server configuration JSON")
 	chatCmd.Flags().BoolVar(&noMCP, "no-mcp", false, "Disable MCP server discovery and integration for this chat session")
+	chatCmd.Flags().BoolVar(&noTools, "no-tools", false, "Disable default workspace coding tools in chat")
 	chatCmd.Flags().StringVar(&thinkingFlag, "thinking", "", "Thinking budget in tokens (integer) or effort level ('off', 'low', 'medium', 'high')")
 	chatCmd.Flags().StringVar(&effortFlag, "effort", "", "Reasoning effort level ('low', 'medium', 'high')")
 	chatCmd.Flags().StringVar(&permissionsFlag, "permissions", "ask", "Tool execution permission mode ('ask', 'auto-edit', 'yolo')")
@@ -295,14 +302,26 @@ func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.Provider
 		querySet = true
 	}
 
+	effectiveNoTools := options.noTools || noTools
 	effectiveNoMCP := options.noMCP || noMCP
 	effectiveMCPConfig := options.mcpConfig
 	if effectiveMCPConfig == "" {
 		effectiveMCPConfig = mcpConfigFile
 	}
 
+	cwd, _ := os.Getwd()
+	isInteractive := !querySet && term.IsTerminal(int(os.Stdin.Fd()))
+	var reader io.Reader
+	if isInteractive {
+		reader = cmd.InOrStdin()
+	}
+
 	var mcpSession *chat.ACPSessionMCP
 	toolRegistry := chat.NewToolRegistry()
+	if !effectiveNoTools {
+		toolRegistry = chat.BuildWorkspaceToolRegistry(cwd, isInteractive, reader)
+	}
+	baseTools := toolRegistry
 	if !effectiveNoMCP {
 		targetPath, isWorkspace, err := chat.DiscoverMCPConfigFile("", effectiveMCPConfig)
 		if err != nil {
@@ -323,7 +342,6 @@ func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.Provider
 					return err
 				}
 				if len(configs) > 0 {
-					cwd, _ := os.Getwd()
 					session, err := chat.NewACPSessionMCP(configs, cwd)
 					if err != nil {
 						return err
@@ -338,6 +356,8 @@ func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.Provider
 		session:    mcpSession,
 		tools:      toolRegistry,
 		configPath: effectiveMCPConfig,
+		baseTools:  baseTools,
+		noTools:    effectiveNoTools,
 	}
 	defer func() {
 		if mcpState != nil && mcpState.session != nil {
@@ -361,7 +381,9 @@ func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.Provider
 		if activeTools == nil {
 			activeTools = chat.NewToolRegistry()
 		}
-		_ = chat.RegisterAskQuestionTool(activeTools, false, nil, cmd.OutOrStdout())
+		if !effectiveNoTools {
+			_ = chat.RegisterAskQuestionTool(activeTools, false, nil, cmd.OutOrStdout())
+		}
 		turnOptions := chat.TurnOptions{
 			Stream:          stream,
 			ToolRegistry:    activeTools,
@@ -669,7 +691,9 @@ func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *c
 		if mcpState != nil && mcpState.tools != nil {
 			activeRegistry = mcpState.tools
 		}
-		_ = chat.RegisterAskQuestionTool(activeRegistry, true, pumpReader, cmd.OutOrStdout())
+		if mcpState == nil || !mcpState.noTools {
+			_ = chat.RegisterAskQuestionTool(activeRegistry, true, pumpReader, cmd.OutOrStdout())
+		}
 		budget, effort := chat.ResolveThinking(0, effortVal, thinkingVal)
 		turnOptions := chat.TurnOptions{
 			Stream:          !noStream,
@@ -1133,7 +1157,11 @@ func handleChatSlash(cmd *cobra.Command, store *chat.SessionStore, session *chat
 						mcpState.session.Close()
 						mcpState.session = nil
 					}
-					mcpState.tools = chat.NewToolRegistry()
+					base := chat.NewToolRegistry()
+					if mcpState.baseTools != nil {
+						base = mcpState.baseTools
+					}
+					mcpState.tools = base
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "MCP reloaded: 0 servers configured.")
 				break
@@ -1155,7 +1183,11 @@ func handleChatSlash(cmd *cobra.Command, store *chat.SessionStore, session *chat
 						mcpState.session.Close()
 						mcpState.session = nil
 					}
-					mcpState.tools = chat.NewToolRegistry()
+					base := chat.NewToolRegistry()
+					if mcpState.baseTools != nil {
+						base = mcpState.baseTools
+					}
+					mcpState.tools = base
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "MCP reloaded: 0 servers configured.")
 				break
@@ -1171,7 +1203,11 @@ func handleChatSlash(cmd *cobra.Command, store *chat.SessionStore, session *chat
 					mcpState.session.Close()
 				}
 				mcpState.session = newSession
-				mcpState.tools = newSession.ToolRegistry(chat.NewToolRegistry())
+				base := chat.NewToolRegistry()
+				if mcpState.baseTools != nil {
+					base = mcpState.baseTools
+				}
+				mcpState.tools = newSession.ToolRegistry(base)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "MCP reloaded: %d server(s) active.\n", len(configs))
 		default:
