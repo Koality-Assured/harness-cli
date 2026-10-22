@@ -133,6 +133,7 @@ type chatOptionsValue struct {
 	effort          string
 	permissions     string
 	plainMode       bool
+	apiKey          string
 }
 
 // SlashOptions carries state for slash command inspection and mutation.
@@ -219,6 +220,7 @@ func init() {
 	chatCmd.Flags().StringVar(&permissionsFlag, "permissions", "ask", "Tool execution permission mode ('ask', 'auto-edit', 'yolo')")
 	chatCmd.Flags().BoolVar(&plainMode, "plain", false, "Disable rich anchored TUI and use plain text line prompts")
 	chatCmd.Flags().BoolVar(&plainMode, "no-tui", false, "Alias for --plain")
+	chatCmd.Flags().StringVar(&chatOptions.apiKey, "api-key", "", "API key or virtual key override (also auto-discovered from env / .env)")
 	sessionsCmd.AddCommand(sessionsListCmd, sessionsRenameCmd, sessionsSearchCmd)
 }
 
@@ -231,13 +233,23 @@ func defaultChatCredential(provider string) (string, error) {
 		return "local", nil
 	}
 	credential, err := auth.EnsureFreshToken(auth.GetVault(), provider, 60*time.Second)
-	if err != nil {
-		return "", err
+	if err == nil && credential != nil && credential.AccessToken != "" {
+		return credential.AccessToken, nil
 	}
-	if credential == nil || credential.AccessToken == "" {
-		return "", fmt.Errorf("no credentials for '%s'. Run: harness auth login %s", provider, provider)
+
+	// Attempt auto-discovery from env vars, .env files, or interactive terminal prompt
+	isTerminal := term.IsTerminal(int(os.Stdin.Fd()))
+	discovered, err := auth.AutoDiscoverAPIKey(provider, isTerminal)
+	if err == nil && discovered != "" {
+		return discovered, nil
 	}
-	return credential.AccessToken, nil
+
+	if provider == "bifrost" {
+		// Client authentication on local Bifrost is optional
+		return "", nil
+	}
+
+	return "", fmt.Errorf("no credentials for '%s'. Run: harness auth login %s", provider, provider)
 }
 
 func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.ProviderClient, credentialResolver chat.CredentialResolver) error {
@@ -263,7 +275,7 @@ func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.Provider
 	if options.provider != "" {
 		resolved, ok := chat.NormalizeProvider(options.provider)
 		if !ok {
-			return fmt.Errorf("unsupported provider '%s'. Supported: anthropic, cursor, gemini, local, openai", options.provider)
+			return fmt.Errorf("unsupported provider '%s'. Supported: anthropic, bifrost, cursor, gemini, local, openai", options.provider)
 		}
 		provider = resolved
 	}
@@ -277,18 +289,27 @@ func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.Provider
 	if provider == "local" && model == "" {
 		model = chat.LocalDefaultModel
 	}
+	if provider == "bifrost" && model == "" {
+		model = chat.BifrostDefaultModel
+	}
 	if (provider == "openai" || provider == "gemini") && model == "" {
 		return fmt.Errorf("provider '%s' requires --model (no safe default confirmed from official docs)", provider)
 	}
 	if client == nil {
 		client = &chat.ProviderClient{}
 	}
-	if credentialResolver == nil {
-		credentialResolver = defaultChatCredential
-	}
-	apiKey, err := credentialResolver(provider)
-	if err != nil {
-		return err
+	var apiKey string
+	if options.apiKey != "" {
+		apiKey = options.apiKey
+	} else {
+		if credentialResolver == nil {
+			credentialResolver = defaultChatCredential
+		}
+		key, err := credentialResolver(provider)
+		if err != nil {
+			return err
+		}
+		apiKey = key
 	}
 	if options.title != "" && session.Title != options.title {
 		updated, err := store.RenameSession(session.ID, options.title)

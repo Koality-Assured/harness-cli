@@ -65,6 +65,22 @@ func TestProviderCompleteShapesAndUsage(t *testing.T) {
 				}
 			},
 		},
+		{
+			provider: "bifrost", model: "openai/gpt-4o", endpoint: "http://127.0.0.1:8080/v1/chat/completions",
+			body: `{"choices":[{"message":{"role":"assistant","content":"hello from bifrost","tool_calls":[{"id":"bf-1","type":"function","function":{"name":"double","arguments":"{\"value\":4}"}}]}}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`,
+			check: func(t *testing.T, request *http.Request, got Completion) {
+				if request.Header.Get("authorization") != "Bearer fake-secret" {
+					t.Fatalf("Bifrost auth header = %q", request.Header.Get("authorization"))
+				}
+				if request.Header.Get("x-bf-vk") != "fake-secret" {
+					t.Fatalf("Bifrost x-bf-vk header = %q", request.Header.Get("x-bf-vk"))
+				}
+				payload := readRequestJSON(t, request)
+				if payload["stream"] != nil || got.Text != "hello from bifrost" || len(got.ToolCalls) != 1 || got.ToolCalls[0].Name != "double" || *got.InputTokens != 10 || *got.OutputTokens != 5 {
+					t.Fatalf("Bifrost payload/completion = %#v / %#v", payload, got)
+				}
+			},
+		},
 	}
 	for _, test := range cases {
 		t.Run(test.provider, func(t *testing.T) {

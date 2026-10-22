@@ -8,9 +8,12 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 )
 
 var ProviderAliases = map[string]string{
@@ -25,9 +28,11 @@ var ProviderAliases = map[string]string{
 	"ollama":       "local",
 	"llamacpp":     "local",
 	"llama-server": "local",
+	"bifrost":      "bifrost",
+	"maxim":        "bifrost",
 }
 
-var SupportedProviders = []string{"anthropic", "cursor", "gemini", "openai", "local"}
+var SupportedProviders = []string{"anthropic", "cursor", "gemini", "openai", "local", "bifrost"}
 
 // NormalizeProvider maps user input or alias to canonical provider ID.
 func NormalizeProvider(input string) (string, bool) {
@@ -339,3 +344,184 @@ func EnsureFreshToken(vault Vault, provider string, buffer time.Duration) (*Cred
 	}
 	return cred, nil
 }
+
+// ProviderEnvVars lists standard environment variables to search per provider.
+var ProviderEnvVars = map[string][]string{
+	"anthropic": {"ANTHROPIC_API_KEY", "CLAUDE_API_KEY"},
+	"openai":    {"OPENAI_API_KEY"},
+	"gemini":    {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
+	"bifrost":   {"BIFROST_API_KEY"},
+	"cursor":    {"CURSOR_API_KEY"},
+}
+
+// ParseDotEnv reads a simple KEY=VALUE dotenv file without external dependencies.
+func ParseDotEnv(path string) map[string]string {
+	result := make(map[string]string)
+	file, err := os.Open(path)
+	if err != nil {
+		return result
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if key, val, found := strings.Cut(line, "="); found {
+			key = strings.TrimSpace(key)
+			val = strings.TrimSpace(val)
+			val = strings.Trim(val, `"'`)
+			if key != "" && val != "" {
+				result[key] = val
+			}
+		}
+	}
+	return result
+}
+
+// AutoDiscoverAPIKey attempts finding API keys automatically from env vars, .env files,
+// or interactive prompt when running in a terminal interface.
+// If found or entered, stores securely in the vault and returns the access token.
+func AutoDiscoverAPIKey(provider string, interactive bool) (string, error) {
+	prov, ok := NormalizeProvider(provider)
+	if !ok {
+		return "", fmt.Errorf("unsupported provider %q", provider)
+	}
+	candidateVars := ProviderEnvVars[prov]
+	if len(candidateVars) == 0 {
+		return "", nil
+	}
+
+	vault := GetVault()
+
+	// 1. Check environment variables
+	for _, varName := range candidateVars {
+		if val := strings.TrimSpace(os.Getenv(varName)); val != "" {
+			cred := &Credential{
+				AccessToken: val,
+				TokenType:   "ApiKey",
+				Profile:     fmt.Sprintf("%s-env-auto-discovered", prov),
+			}
+			_ = vault.SetCredential(prov, cred)
+			fmt.Fprintf(os.Stderr, "Notice: discovered %s API key from $%s (%s). Saved to vault.\n", prov, varName, MaskToken(val))
+			return val, nil
+		}
+	}
+
+	// 2. Check .env files in cwd, parent directories up to git root, and ~/.harness/.env
+	searchDirs := make([]string, 0, 8)
+	if cwd, err := os.Getwd(); err == nil {
+		searchDirs = append(searchDirs, cwd)
+		curr := cwd
+		for {
+			parent := filepath.Dir(curr)
+			if parent == curr || parent == "" {
+				break
+			}
+			searchDirs = append(searchDirs, parent)
+			if _, err := os.Stat(filepath.Join(parent, ".git")); err == nil {
+				break
+			}
+			curr = parent
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		searchDirs = append(searchDirs, filepath.Join(home, ".harness"))
+	}
+
+	for _, dir := range searchDirs {
+		envPath := filepath.Join(dir, ".env")
+		if info, err := os.Stat(envPath); err == nil && !info.IsDir() {
+			parsed := ParseDotEnv(envPath)
+			for _, varName := range candidateVars {
+				if val, exists := parsed[varName]; exists && strings.TrimSpace(val) != "" {
+					val = strings.TrimSpace(val)
+					cred := &Credential{
+						AccessToken: val,
+						TokenType:   "ApiKey",
+						Profile:     fmt.Sprintf("%s-dotenv-auto-discovered", prov),
+					}
+					_ = vault.SetCredential(prov, cred)
+					fmt.Fprintf(os.Stderr, "Notice: discovered %s API key from %s (%s). Saved to vault.\n", prov, envPath, MaskToken(val))
+					return val, nil
+				}
+			}
+		}
+	}
+
+	// 3. Interactive prompt fallback when running as a terminal interface
+	if interactive {
+		fd := int(os.Stdin.Fd())
+		if term.IsTerminal(fd) {
+			fmt.Fprintf(os.Stderr, "\nNo credentials found for provider '%s'.\n", prov)
+			fmt.Fprintf(os.Stderr, "Enter %s API key (input is masked): ", prov)
+			bytePass, err := term.ReadPassword(fd)
+			fmt.Fprintln(os.Stderr)
+			if err == nil {
+				val := strings.TrimSpace(string(bytePass))
+				if val != "" {
+					cred := &Credential{
+						AccessToken: val,
+						TokenType:   "ApiKey",
+						Profile:     fmt.Sprintf("%s-interactive-login", prov),
+					}
+					if err := vault.SetCredential(prov, cred); err != nil {
+						fmt.Fprintf(os.Stderr, "warning: could not persist key to vault: %v\n", err)
+					} else {
+						titleProv := prov
+						if len(titleProv) > 0 {
+							titleProv = strings.ToUpper(titleProv[:1]) + titleProv[1:]
+						}
+						fmt.Fprintf(os.Stderr, "%s API key stored successfully (%s).\n", titleProv, MaskToken(val))
+					}
+					return val, nil
+				}
+			}
+		}
+	}
+
+	return "", nil
+}
+
+// LoginBifrost orchestrates Maxim Bifrost gateway authentication.
+func LoginBifrost(apiKey string) error {
+	vault := GetVault()
+
+	if apiKey != "" {
+		cred := &Credential{
+			AccessToken: apiKey,
+			TokenType:   "ApiKey",
+			ExpiresAt:   nil,
+			Profile:     "bifrost-api-key",
+		}
+		if err := vault.SetCredential("bifrost", cred); err != nil {
+			return err
+		}
+		fmt.Printf("Bifrost API key stored successfully (%s).\n", MaskToken(apiKey))
+		return nil
+	}
+
+	fmt.Println("\n=== Maxim Bifrost AI Gateway Authentication ===")
+	fmt.Println("Local Bifrost deployments default to unauthenticated access (client.enforce_auth_on_inference: false).")
+	fmt.Println("If your Bifrost gateway requires a Virtual Key, enter it below, or press Enter for unauthenticated local access.")
+	key := promptSecret("Enter Bifrost Virtual Key (or leave empty)")
+	if key == "" {
+		fmt.Println("Configured for unauthenticated local Bifrost access.")
+		return nil
+	}
+
+	cred := &Credential{
+		AccessToken: key,
+		TokenType:   "ApiKey",
+		ExpiresAt:   nil,
+		Profile:     "bifrost-virtual-key",
+	}
+	if err := vault.SetCredential("bifrost", cred); err != nil {
+		return err
+	}
+	fmt.Printf("Bifrost Virtual Key stored successfully (%s).\n", MaskToken(key))
+	return nil
+}
+
