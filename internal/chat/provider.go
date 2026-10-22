@@ -25,12 +25,16 @@ const (
 	LocalBaseURLEnv       = "HARNESS_LOCAL_BASE_URL"
 	DefaultLocalBaseURL   = "http://127.0.0.1:11434/v1"
 	LocalDefaultModel     = "qwen2.5-coder:14b"
+	BifrostBaseURLEnv     = "HARNESS_BIFROST_BASE_URL"
+	DefaultBifrostBaseURL = "http://127.0.0.1:8080/v1"
+	BifrostDefaultModel   = "openai/gpt-4o"
 )
 
 var providerAliases = map[string]string{
 	"claude": "anthropic", "anthropic": "anthropic", "cursor": "cursor",
 	"gemini": "gemini", "google": "gemini", "openai": "openai", "gpt": "openai",
 	"local": "local", "ollama": "local", "llamacpp": "local", "llama-server": "local",
+	"bifrost": "bifrost", "maxim": "bifrost",
 }
 
 // HTTPDoer makes provider requests replaceable with deterministic fake transports.
@@ -108,6 +112,9 @@ func resolveModel(provider, model string) (string, error) {
 	}
 	if provider == "local" {
 		return LocalDefaultModel, nil
+	}
+	if provider == "bifrost" {
+		return BifrostDefaultModel, nil
 	}
 	return "", &ProviderError{Provider: provider, Message: provider + " requires --model"}
 }
@@ -272,6 +279,24 @@ func buildRequest(provider, model string, messages []Message, apiKey string, too
 			return "", nil, nil, err
 		}
 		return marshalRequest(endpoint, headers, payload)
+	case "bifrost":
+		payload = map[string]any{"model": model, "messages": messagesForOpenAI(messages)}
+		if stream {
+			payload["stream"] = true
+			payload["stream_options"] = map[string]any{"include_usage": true}
+		}
+		if definitions := openAITools(tools); len(definitions) > 0 {
+			payload["tools"] = definitions
+		}
+		if apiKey != "" {
+			headers["authorization"] = "Bearer " + apiKey
+			headers["x-bf-vk"] = apiKey
+		}
+		endpoint, err := bifrostChatCompletionsEndpoint()
+		if err != nil {
+			return "", nil, nil, err
+		}
+		return marshalRequest(endpoint, headers, payload)
 	case "gemini":
 		payload = map[string]any{"contents": geminiContents(messages)}
 		if IsGeminiThinkingSupported(model) {
@@ -310,6 +335,18 @@ func buildRequest(provider, model string, messages []Message, apiKey string, too
 // BuildRequest is the exported version of buildRequest for testing and external callers.
 func BuildRequest(provider, model string, messages []Message, apiKey string, tools []ToolDefinition, stream bool, opts ...TurnOptions) (string, map[string]string, []byte, error) {
 	return buildRequest(provider, model, messages, apiKey, tools, stream, opts...)
+}
+
+func bifrostChatCompletionsEndpoint() (string, error) {
+	base := strings.TrimSpace(os.Getenv(BifrostBaseURLEnv))
+	if base == "" {
+		base = DefaultBifrostBaseURL
+	}
+	parsed, err := url.Parse(base)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return "", &ProviderError{Provider: "bifrost", Message: "invalid " + BifrostBaseURLEnv + "; expected an HTTP(S) origin (default: " + DefaultBifrostBaseURL + ")"}
+	}
+	return strings.TrimRight(base, "/") + "/chat/completions", nil
 }
 
 func localChatCompletionsEndpoint() (string, error) {
@@ -551,7 +588,7 @@ func decodeCompletion(provider string, data map[string]any) (Completion, error) 
 		result.ProviderMessage = map[string]any{"role": "assistant", "content": blocks}
 		usage, _ := data["usage"].(map[string]any)
 		result.InputTokens, result.OutputTokens = tokenCount(usage["input_tokens"]), tokenCount(usage["output_tokens"])
-	case "openai", "local":
+	case "openai", "local", "bifrost":
 		choices, _ := data["choices"].([]any)
 		if len(choices) > 0 {
 			choice, _ := choices[0].(map[string]any)
@@ -602,7 +639,7 @@ func decodeCompletion(provider string, data map[string]any) (Completion, error) 
 		usage, _ := data["usageMetadata"].(map[string]any)
 		result.InputTokens, result.OutputTokens = tokenCount(usage["promptTokenCount"]), tokenCount(usage["candidatesTokenCount"])
 	}
-	if provider == "anthropic" || provider == "openai" || provider == "local" {
+	if provider == "anthropic" || provider == "openai" || provider == "local" || provider == "bifrost" {
 		for _, call := range result.ToolCalls {
 			if strings.TrimSpace(call.ID) == "" {
 				return Completion{}, &ProviderError{Provider: provider, Message: provider + " returned a tool call without a required call ID"}
@@ -751,7 +788,7 @@ func readStream(ctx context.Context, provider string, source io.Reader, apiKey s
 			}
 			return nil
 		}
-		if provider == "openai" || provider == "local" {
+		if provider == "openai" || provider == "local" || provider == "bifrost" {
 			usage, _ := data["usage"].(map[string]any)
 			if value, exists := usage["prompt_tokens"]; exists {
 				inputTokens = tokenCount(value)
@@ -925,7 +962,7 @@ func readStream(ctx context.Context, provider string, source io.Reader, apiKey s
 			continue
 		}
 	}
-	if (provider == "openai" || provider == "local") && !streamDone {
+	if (provider == "openai" || provider == "local" || provider == "bifrost") && !streamDone {
 		return Completion{}, &ProviderError{Provider: provider, Message: provider + " stream ended before [DONE]"}
 	}
 
@@ -956,7 +993,7 @@ func readStream(ctx context.Context, provider string, source io.Reader, apiKey s
 			blocks = append(blocks, block)
 		}
 		completion.ProviderMessage = map[string]any{"role": "assistant", "content": blocks}
-	case "openai", "local":
+	case "openai", "local", "bifrost":
 		indices := sortedIntKeys(openAICalls)
 		nativeCalls := make([]any, 0, len(indices))
 		for _, index := range indices {

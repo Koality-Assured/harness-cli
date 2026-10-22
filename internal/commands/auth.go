@@ -50,6 +50,8 @@ var authLoginCmd = &cobra.Command{
 		case "local":
 			fmt.Fprintln(cmd.OutOrStdout(), "Notice: local model runtime executes on localhost without requiring vault API keys.")
 			return nil
+		case "bifrost":
+			return auth.LoginBifrost(authAPIKey)
 		default:
 			return fmt.Errorf("provider '%s' handler not implemented", prov)
 		}
@@ -86,6 +88,21 @@ var authStatusCmd = &cobra.Command{
 					TokenType:     "None",
 				})
 				continue
+			}
+			if p == "bifrost" {
+				cred, err := vault.GetCredential(p)
+				if err != nil || cred == nil || cred.AccessToken == "" {
+					statuses = append(statuses, ProviderStatus{
+						Provider:      "bifrost",
+						Authenticated: true,
+						Status:        "OPTIONAL_KEY",
+						Profile:       "Localhost Gateway (Auth Optional)",
+						Expires:       "Never (Local Gateway)",
+						TokenMasked:   "none",
+						TokenType:     "None",
+					})
+					continue
+				}
 			}
 			cred, err := vault.GetCredential(p)
 			if err == nil && cred != nil {
