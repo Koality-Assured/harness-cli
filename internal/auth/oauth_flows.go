@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -17,22 +20,26 @@ import (
 )
 
 var ProviderAliases = map[string]string{
-	"claude":       "anthropic",
-	"anthropic":    "anthropic",
-	"cursor":       "cursor",
-	"gemini":       "gemini",
-	"google":       "gemini",
-	"openai":       "openai",
-	"gpt":          "openai",
-	"local":        "local",
-	"ollama":       "local",
-	"llamacpp":     "local",
-	"llama-server": "local",
-	"bifrost":      "bifrost",
-	"maxim":        "bifrost",
+	"claude":         "anthropic",
+	"anthropic":      "anthropic",
+	"cursor":         "cursor",
+	"gemini":         "gemini",
+	"google":         "gemini",
+	"openai":         "openai",
+	"gpt":            "openai",
+	"local":          "local",
+	"ollama":         "local",
+	"llamacpp":       "local",
+	"llama-server":   "local",
+	"bifrost":        "bifrost",
+	"maxim":          "bifrost",
+	"copilot":        "copilot",
+	"github-copilot": "copilot",
+	"codex":          "copilot",
+	"muse":           "muse",
 }
 
-var SupportedProviders = []string{"anthropic", "cursor", "gemini", "openai", "local", "bifrost"}
+var SupportedProviders = []string{"anthropic", "cursor", "gemini", "openai", "local", "bifrost", "copilot", "muse"}
 
 // NormalizeProvider maps user input or alias to canonical provider ID.
 func NormalizeProvider(input string) (string, bool) {
@@ -66,16 +73,30 @@ func LoginAnthropic(noBrowser bool, apiKey string) error {
 	vault := GetVault()
 
 	if apiKey != "" {
+		tokenType := "ApiKey"
+		profile := "developer-api-key"
+		if strings.HasPrefix(apiKey, "sk-ant-oat01-") || strings.HasPrefix(apiKey, "Bearer ") {
+			tokenType = "Bearer"
+			profile = "claude-code-token"
+		}
 		cred := &Credential{
-			AccessToken: apiKey,
-			TokenType:   "ApiKey",
+			AccessToken: strings.TrimSpace(apiKey),
+			TokenType:   tokenType,
 			ExpiresAt:   nil,
-			Profile:     "developer-api-key",
+			Profile:     profile,
 		}
 		if err := vault.SetCredential("anthropic", cred); err != nil {
 			return err
 		}
-		fmt.Printf("Anthropic API key stored successfully (%s).\n", MaskToken(apiKey))
+		fmt.Printf("Anthropic credential stored successfully (%s).\n", MaskToken(apiKey))
+		return nil
+	}
+
+	if cred := AutoDiscoverClaudeCredentials(); cred != nil {
+		if err := vault.SetCredential("anthropic", cred); err != nil {
+			return err
+		}
+		fmt.Printf("Anthropic Claude session credentials auto-discovered (%s).\n", MaskToken(cred.AccessToken))
 		return nil
 	}
 
@@ -181,16 +202,34 @@ func LoginGemini(noBrowser, deviceCode bool, apiKey string) error {
 	vault := GetVault()
 
 	if apiKey != "" {
+		clean := strings.TrimSpace(apiKey)
+		tokenType := "ApiKey"
+		profile := "gemini-api-key"
+		var exp *int64
+		if strings.HasPrefix(clean, "ya29.") || strings.HasPrefix(clean, "Bearer ") {
+			tokenType = "Bearer"
+			profile = "gemini-oauth-token"
+			e := time.Now().Add(1 * time.Hour).Unix()
+			exp = &e
+		}
 		cred := &Credential{
-			AccessToken: apiKey,
-			TokenType:   "ApiKey",
-			ExpiresAt:   nil,
-			Profile:     "gemini-api-key",
+			AccessToken: clean,
+			TokenType:   tokenType,
+			ExpiresAt:   exp,
+			Profile:     profile,
 		}
 		if err := vault.SetCredential("gemini", cred); err != nil {
 			return err
 		}
-		fmt.Printf("Gemini API key stored successfully (%s).\n", MaskToken(apiKey))
+		fmt.Printf("Gemini credential stored successfully (%s).\n", MaskToken(clean))
+		return nil
+	}
+
+	if cred := AutoDiscoverGeminiCredentials(); cred != nil {
+		if err := vault.SetCredential("gemini", cred); err != nil {
+			return err
+		}
+		fmt.Printf("Google Gemini session credentials auto-discovered (%s).\n", MaskToken(cred.AccessToken))
 		return nil
 	}
 
@@ -291,6 +330,15 @@ func RefreshToken(vault Vault, provider string) (*Credential, error) {
 		return cred, nil
 	}
 
+	if provider == "copilot" {
+		newCred, err := ExchangeCopilotToken(cred.RefreshToken)
+		if err == nil && newCred != nil {
+			_ = vault.SetCredential(provider, newCred)
+			return newCred, nil
+		}
+		return cred, nil
+	}
+
 	stateBytes := make([]byte, 16)
 	_, _ = rand.Read(stateBytes)
 	rotState := hex.EncodeToString(stateBytes)
@@ -347,11 +395,13 @@ func EnsureFreshToken(vault Vault, provider string, buffer time.Duration) (*Cred
 
 // ProviderEnvVars lists standard environment variables to search per provider.
 var ProviderEnvVars = map[string][]string{
-	"anthropic": {"ANTHROPIC_API_KEY", "CLAUDE_API_KEY"},
+	"anthropic": {"ANTHROPIC_API_KEY", "CLAUDE_API_KEY", "CLAUDE_CODE_TOKEN"},
 	"openai":    {"OPENAI_API_KEY"},
-	"gemini":    {"GEMINI_API_KEY", "GOOGLE_API_KEY"},
+	"gemini":    {"GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_CLI_TOKEN"},
 	"bifrost":   {"BIFROST_API_KEY"},
 	"cursor":    {"CURSOR_API_KEY"},
+	"copilot":   {"COPILOT_TOKEN", "GITHUB_COPILOT_TOKEN"},
+	"muse":      {"META_API_KEY", "MUSE_API_KEY"},
 }
 
 // ParseDotEnv reads a simple KEY=VALUE dotenv file without external dependencies.
@@ -451,6 +501,34 @@ func AutoDiscoverAPIKey(provider string, interactive bool) (string, error) {
 		}
 	}
 
+	// 2.5 Ambient discovery from local session credentials or standard tool directories
+	switch prov {
+	case "anthropic":
+		if cred := AutoDiscoverClaudeCredentials(); cred != nil {
+			_ = vault.SetCredential(prov, cred)
+			fmt.Fprintf(os.Stderr, "Notice: auto-discovered %s session credentials (%s). Saved to vault.\n", prov, MaskToken(cred.AccessToken))
+			return cred.AccessToken, nil
+		}
+	case "gemini":
+		if cred := AutoDiscoverGeminiCredentials(); cred != nil {
+			_ = vault.SetCredential(prov, cred)
+			fmt.Fprintf(os.Stderr, "Notice: auto-discovered %s session credentials (%s). Saved to vault.\n", prov, MaskToken(cred.AccessToken))
+			return cred.AccessToken, nil
+		}
+	case "copilot":
+		if cred := AutoDiscoverCopilotCredentials(); cred != nil {
+			_ = vault.SetCredential(prov, cred)
+			fmt.Fprintf(os.Stderr, "Notice: auto-discovered %s session credentials (%s). Saved to vault.\n", prov, MaskToken(cred.AccessToken))
+			return cred.AccessToken, nil
+		}
+	case "muse":
+		if cred := AutoDiscoverMuseCredentials(); cred != nil {
+			_ = vault.SetCredential(prov, cred)
+			fmt.Fprintf(os.Stderr, "Notice: auto-discovered %s credentials (%s). Saved to vault.\n", prov, MaskToken(cred.AccessToken))
+			return cred.AccessToken, nil
+		}
+	}
+
 	// 3. Interactive prompt fallback when running as a terminal interface
 	if interactive {
 		fd := int(os.Stdin.Fd())
@@ -524,4 +602,534 @@ func LoginBifrost(apiKey string) error {
 	fmt.Printf("Bifrost Virtual Key stored successfully (%s).\n", MaskToken(key))
 	return nil
 }
+
+const (
+	CopilotTokenEndpoint = "https://api.github.com/copilot_internal/v2/token"
+	CopilotClientID      = "01ab8ac94e5469b812b5"
+	GitHubDeviceCodeURL  = "https://github.com/login/device/code"
+	GitHubAccessTokenURL = "https://github.com/login/oauth/access_token"
+)
+
+// ExchangeCopilotToken exchanges a primary GitHub OAuth/PAT token (gho_...) for a transient Copilot session token.
+func ExchangeCopilotToken(githubOAuthToken string) (*Credential, error) {
+	cleanToken := strings.TrimSpace(githubOAuthToken)
+	if cleanToken == "" {
+		return nil, fmt.Errorf("empty github oauth token")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, CopilotTokenEndpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "token "+cleanToken)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Editor-Version", "vscode/1.95.0")
+	req.Header.Set("Editor-Plugin-Version", "copilot-chat/0.22.4")
+	req.Header.Set("User-Agent", "GitHubCopilotChat/0.22.4")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("copilot token exchange request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("copilot token exchange returned HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var data struct {
+		Token     string      `json:"token"`
+		ExpiresAt interface{} `json:"expires_at"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, fmt.Errorf("failed to decode copilot response: %w", err)
+	}
+	if data.Token == "" {
+		return nil, fmt.Errorf("copilot response did not contain token")
+	}
+
+	var expiresAt int64 = time.Now().Add(30 * time.Minute).Unix()
+	switch v := data.ExpiresAt.(type) {
+	case float64:
+		expiresAt = int64(v)
+	case int64:
+		expiresAt = v
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			expiresAt = n
+		}
+	}
+
+	return &Credential{
+		AccessToken:  data.Token,
+		RefreshToken: cleanToken,
+		TokenType:    "Bearer",
+		ExpiresAt:    expiresAt,
+		Profile:      "github-copilot-subscription",
+	}, nil
+}
+
+// AutoDiscoverClaudeCredentials attempts discovering credentials from CLAUDE_CODE_TOKEN,
+// ANTHROPIC_AUTH_TOKEN, or ~/.claude/.credentials.json, ~/.claude.json.
+func AutoDiscoverClaudeCredentials() *Credential {
+	for _, envVar := range []string{"CLAUDE_CODE_TOKEN", "ANTHROPIC_AUTH_TOKEN"} {
+		if val := strings.TrimSpace(os.Getenv(envVar)); val != "" {
+			tokenType := "ApiKey"
+			if strings.HasPrefix(val, "sk-ant-oat01-") || strings.HasPrefix(val, "Bearer ") {
+				tokenType = "Bearer"
+			}
+			return &Credential{
+				AccessToken: val,
+				TokenType:   tokenType,
+				Profile:     "claude-code-env",
+			}
+		}
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+
+	candidates := []string{
+		filepath.Join(home, ".claude", ".credentials.json"),
+		filepath.Join(home, ".claude.json"),
+		filepath.Join(home, ".config", "claude", "credentials.json"),
+	}
+
+	for _, path := range candidates {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var parsed map[string]interface{}
+		if err := json.Unmarshal(content, &parsed); err != nil {
+			continue
+		}
+
+		var token string
+		for _, key := range []string{"accessToken", "access_token", "token"} {
+			if v, ok := parsed[key].(string); ok && v != "" {
+				token = v
+				break
+			}
+		}
+		if token == "" {
+			if claudeMap, ok := parsed["claude"].(map[string]interface{}); ok {
+				if v, ok := claudeMap["token"].(string); ok && v != "" {
+					token = v
+				}
+			}
+		}
+
+		token = strings.TrimSpace(token)
+		if token != "" && (strings.HasPrefix(token, "sk-ant-") || strings.HasPrefix(token, "sk-")) {
+			tokenType := "ApiKey"
+			if strings.HasPrefix(token, "sk-ant-oat01-") {
+				tokenType = "Bearer"
+			}
+			var exp interface{}
+			if e, ok := parsed["expiresAt"].(float64); ok && e > 0 {
+				if e > 1e11 {
+					exp = int64(e / 1000)
+				} else {
+					exp = int64(e)
+				}
+			} else if e, ok := parsed["expires_at"].(float64); ok && e > 0 {
+				exp = int64(e)
+			}
+			return &Credential{
+				AccessToken: token,
+				TokenType:   tokenType,
+				ExpiresAt:   exp,
+				Profile:     "claude-code-ambient",
+			}
+		}
+	}
+
+	return nil
+}
+
+// AutoDiscoverGeminiCredentials discovers ambient Google Cloud ADC or Gemini CLI session tokens.
+func AutoDiscoverGeminiCredentials() *Credential {
+	for _, envVar := range []string{"GEMINI_CLI_TOKEN", "GOOGLE_OAUTH_ACCESS_TOKEN"} {
+		if val := strings.TrimSpace(os.Getenv(envVar)); val != "" {
+			return &Credential{
+				AccessToken: val,
+				TokenType:   "Bearer",
+				ExpiresAt:   time.Now().Add(1 * time.Hour).Unix(),
+				Profile:     "gemini-env",
+			}
+		}
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+
+	candidates := []string{
+		filepath.Join(home, ".gemini", "tokens.json"),
+		filepath.Join(home, ".config", "gcloud", "application_default_credentials.json"),
+	}
+
+	for _, path := range candidates {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var parsed map[string]interface{}
+		if err := json.Unmarshal(content, &parsed); err != nil {
+			continue
+		}
+
+		var token string
+		for _, key := range []string{"access_token", "token", "accessToken"} {
+			if v, ok := parsed[key].(string); ok && v != "" {
+				token = v
+				break
+			}
+		}
+
+		token = strings.TrimSpace(token)
+		if token != "" {
+			return &Credential{
+				AccessToken: token,
+				TokenType:   "Bearer",
+				ExpiresAt:   time.Now().Add(1 * time.Hour).Unix(),
+				Profile:     "gemini-ambient",
+			}
+		}
+	}
+
+	return nil
+}
+
+// AutoDiscoverCopilotCredentials discovers ambient GitHub Copilot tokens from hosts.json or gh hosts.yml.
+func AutoDiscoverCopilotCredentials() *Credential {
+	for _, envVar := range []string{"COPILOT_TOKEN", "GITHUB_COPILOT_TOKEN"} {
+		if val := strings.TrimSpace(os.Getenv(envVar)); val != "" {
+			if strings.Contains(val, "tid=") {
+				return &Credential{
+					AccessToken: val,
+					TokenType:   "Bearer",
+					ExpiresAt:   time.Now().Add(30 * time.Minute).Unix(),
+					Profile:     "copilot-session-env",
+				}
+			}
+			cred, err := ExchangeCopilotToken(val)
+			if err == nil && cred != nil {
+				return cred
+			}
+		}
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+
+	copilotHosts := filepath.Join(home, ".config", "github-copilot", "hosts.json")
+	if content, err := os.ReadFile(copilotHosts); err == nil {
+		var hosts map[string]map[string]interface{}
+		if err := json.Unmarshal(content, &hosts); err == nil {
+			for _, info := range hosts {
+				if oauthToken, ok := info["oauth_token"].(string); ok && strings.TrimSpace(oauthToken) != "" {
+					cred, err := ExchangeCopilotToken(oauthToken)
+					if err == nil && cred != nil {
+						return cred
+					}
+				}
+			}
+		}
+	}
+
+	ghHosts := filepath.Join(home, ".config", "gh", "hosts.yml")
+	if content, err := os.ReadFile(ghHosts); err == nil {
+		lines := strings.Split(string(content), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "oauth_token:") {
+				parts := strings.SplitN(line, ":", 2)
+				if len(parts) == 2 {
+					token := strings.TrimSpace(parts[1])
+					if strings.HasPrefix(token, "gho_") || strings.HasPrefix(token, "ghp_") {
+						cred, err := ExchangeCopilotToken(token)
+						if err == nil && cred != nil {
+							return cred
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// AutoDiscoverMuseCredentials discovers ambient Meta Muse API keys or local session credentials.
+func AutoDiscoverMuseCredentials() *Credential {
+	for _, envVar := range []string{"META_API_KEY", "MUSE_API_KEY"} {
+		if val := strings.TrimSpace(os.Getenv(envVar)); val != "" {
+			return &Credential{
+				AccessToken: val,
+				TokenType:   "ApiKey",
+				Profile:     "muse-env",
+			}
+		}
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+
+	candidates := []string{
+		filepath.Join(home, ".muse", "credentials.json"),
+		filepath.Join(home, ".muse", "config.json"),
+	}
+
+	for _, path := range candidates {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var parsed map[string]interface{}
+		if err := json.Unmarshal(content, &parsed); err != nil {
+			continue
+		}
+
+		var token string
+		for _, key := range []string{"api_key", "apiKey", "token", "access_token"} {
+			if v, ok := parsed[key].(string); ok && v != "" {
+				token = v
+				break
+			}
+		}
+
+		token = strings.TrimSpace(token)
+		if token != "" {
+			tokenType := "Bearer"
+			if strings.HasPrefix(token, "meta_") || strings.HasPrefix(token, "mk_") {
+				tokenType = "ApiKey"
+			}
+			return &Credential{
+				AccessToken: token,
+				TokenType:   tokenType,
+				Profile:     "muse-ambient",
+			}
+		}
+	}
+
+	return nil
+}
+
+// LoginCopilot orchestrates GitHub Copilot authentication.
+// Supports direct Copilot session token, GitHub PAT/OAuth exchange, ambient discovery,
+// or RFC 8628 GitHub Device Code Flow.
+func LoginCopilot(apiKey string) error {
+	vault := GetVault()
+
+	if apiKey != "" {
+		clean := strings.TrimSpace(apiKey)
+		if strings.Contains(clean, "tid=") {
+			cred := &Credential{
+				AccessToken: clean,
+				TokenType:   "Bearer",
+				ExpiresAt:   time.Now().Add(30 * time.Minute).Unix(),
+				Profile:     "copilot-session-token",
+			}
+			if err := vault.SetCredential("copilot", cred); err != nil {
+				return err
+			}
+			fmt.Printf("GitHub Copilot session token stored (%s).\n", MaskToken(clean))
+			return nil
+		}
+		if strings.HasPrefix(clean, "gho_") || strings.HasPrefix(clean, "ghp_") || strings.HasPrefix(clean, "github_pat_") {
+			cred, err := ExchangeCopilotToken(clean)
+			if err != nil {
+				return fmt.Errorf("failed to exchange GitHub token with Copilot API: %w", err)
+			}
+			if err := vault.SetCredential("copilot", cred); err != nil {
+				return err
+			}
+			fmt.Printf("GitHub Copilot session exchanged and stored (%s).\n", MaskToken(cred.AccessToken))
+			return nil
+		}
+		return fmt.Errorf("token must be a GitHub token (gho_...) or Copilot session token (tid=...)")
+	}
+
+	if cred := AutoDiscoverCopilotCredentials(); cred != nil {
+		if err := vault.SetCredential("copilot", cred); err != nil {
+			return err
+		}
+		fmt.Printf("GitHub Copilot session credentials auto-discovered (%s).\n", MaskToken(cred.AccessToken))
+		return nil
+	}
+
+	return runGitHubDeviceFlow(vault)
+}
+
+func runGitHubDeviceFlow(vault Vault) error {
+	client := &http.Client{Timeout: 10 * time.Second}
+	form := url.Values{}
+	form.Set("client_id", CopilotClientID)
+	form.Set("scope", "read:user")
+
+	req, err := http.NewRequest(http.MethodPost, GitHubDeviceCodeURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to initiate GitHub Device Code flow: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var deviceResp struct {
+		DeviceCode      string `json:"device_code"`
+		UserCode        string `json:"user_code"`
+		VerificationURI string `json:"verification_uri"`
+		Interval        int    `json:"interval"`
+		ExpiresIn       int    `json:"expires_in"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&deviceResp); err != nil {
+		return fmt.Errorf("failed to decode GitHub Device Code response: %w", err)
+	}
+	if deviceResp.DeviceCode == "" || deviceResp.UserCode == "" {
+		return fmt.Errorf("invalid response from GitHub Device Code endpoint")
+	}
+
+	verificationURI := deviceResp.VerificationURI
+	if verificationURI == "" {
+		verificationURI = "https://github.com/login/device"
+	}
+	interval := deviceResp.Interval
+	if interval <= 0 {
+		interval = 5
+	}
+
+	fmt.Println("\n=== GitHub Copilot Subscription Authentication ===")
+	fmt.Printf("1. Open your browser to: %s\n", verificationURI)
+	fmt.Printf("2. Enter the one-time code: %s\n\n", deviceResp.UserCode)
+	fmt.Println("Waiting for authorization in browser...")
+
+	openBrowser(verificationURI)
+
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		time.Sleep(time.Duration(interval) * time.Second)
+
+		pollForm := url.Values{}
+		pollForm.Set("client_id", CopilotClientID)
+		pollForm.Set("device_code", deviceResp.DeviceCode)
+		pollForm.Set("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
+
+		pollReq, err := http.NewRequest(http.MethodPost, GitHubAccessTokenURL, strings.NewReader(pollForm.Encode()))
+		if err != nil {
+			continue
+		}
+		pollReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		pollReq.Header.Set("Accept", "application/json")
+
+		pollResp, err := client.Do(pollReq)
+		if err != nil {
+			continue
+		}
+
+		var pollData struct {
+			AccessToken string `json:"access_token"`
+			TokenType   string `json:"token_type"`
+			Error       string `json:"error"`
+			ErrorDesc   string `json:"error_description"`
+		}
+		_ = json.NewDecoder(pollResp.Body).Decode(&pollData)
+		pollResp.Body.Close()
+
+		if pollData.AccessToken != "" {
+			cred, err := ExchangeCopilotToken(pollData.AccessToken)
+			if err != nil {
+				return fmt.Errorf("GitHub authentication succeeded, but Copilot token exchange failed: %w", err)
+			}
+			if err := vault.SetCredential("copilot", cred); err != nil {
+				return err
+			}
+			fmt.Printf("\nGitHub Copilot authentication successful! (%s)\n", MaskToken(cred.AccessToken))
+			return nil
+		}
+
+		if pollData.Error == "authorization_pending" {
+			continue
+		}
+		if pollData.Error == "slow_down" {
+			interval += 5
+			continue
+		}
+		if pollData.Error == "expired_token" || pollData.Error == "access_denied" {
+			return fmt.Errorf("github device authorization failed: %s (%s)", pollData.Error, pollData.ErrorDesc)
+		}
+	}
+
+	return fmt.Errorf("github device authorization timed out waiting for browser approval")
+}
+
+// LoginMuse orchestrates Meta Muse authentication.
+func LoginMuse(apiKey string) error {
+	vault := GetVault()
+
+	if apiKey != "" {
+		clean := strings.TrimSpace(apiKey)
+		tokenType := "Bearer"
+		if strings.HasPrefix(clean, "meta_") || strings.HasPrefix(clean, "mk_") {
+			tokenType = "ApiKey"
+		}
+		cred := &Credential{
+			AccessToken: clean,
+			TokenType:   tokenType,
+			Profile:     "muse-api-key",
+		}
+		if err := vault.SetCredential("muse", cred); err != nil {
+			return err
+		}
+		fmt.Printf("Meta Muse credential stored successfully (%s).\n", MaskToken(clean))
+		return nil
+	}
+
+	if cred := AutoDiscoverMuseCredentials(); cred != nil {
+		if err := vault.SetCredential("muse", cred); err != nil {
+			return err
+		}
+		fmt.Printf("Meta Muse credentials auto-discovered (%s).\n", MaskToken(cred.AccessToken))
+		return nil
+	}
+
+	fmt.Println("\n=== Meta Muse Authentication ===")
+	fmt.Println("Meta Muse credentials can be provided as a META_API_KEY / MUSE_API_KEY")
+	fmt.Println("or discovered from local ~/.muse/ configuration.")
+	key := promptSecret("Enter Meta / Muse API Key")
+	if key == "" {
+		return fmt.Errorf("no credential provided")
+	}
+
+	tokenType := "Bearer"
+	if strings.HasPrefix(key, "meta_") || strings.HasPrefix(key, "mk_") {
+		tokenType = "ApiKey"
+	}
+	cred := &Credential{
+		AccessToken: key,
+		TokenType:   tokenType,
+		Profile:     "muse-api-key",
+	}
+	if err := vault.SetCredential("muse", cred); err != nil {
+		return err
+	}
+	fmt.Printf("Meta Muse credential stored successfully (%s).\n", MaskToken(key))
+	return nil
+}
+
 

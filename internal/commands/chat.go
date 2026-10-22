@@ -275,7 +275,7 @@ func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.Provider
 	if options.provider != "" {
 		resolved, ok := chat.NormalizeProvider(options.provider)
 		if !ok {
-			return fmt.Errorf("unsupported provider '%s'. Supported: anthropic, bifrost, cursor, gemini, local, openai", options.provider)
+			return fmt.Errorf("unsupported provider '%s'. Supported: anthropic, bifrost, cursor, gemini, local, openai, copilot, muse", options.provider)
 		}
 		provider = resolved
 	}
@@ -291,6 +291,9 @@ func runChat(cmd *cobra.Command, options chatOptionsValue, client *chat.Provider
 	}
 	if provider == "bifrost" && model == "" {
 		model = chat.BifrostDefaultModel
+	}
+	if provider == "copilot" && model == "" {
+		model = chat.CopilotDefaultModel
 	}
 	if (provider == "openai" || provider == "gemini") && model == "" {
 		return fmt.Errorf("provider '%s' requires --model (no safe default confirmed from official docs)", provider)
@@ -518,7 +521,7 @@ func openOrResumeSession(store *chat.SessionStore, options chatOptionsValue) (*c
 	}
 	provider, ok := chat.NormalizeProvider(rawProvider)
 	if !ok {
-		return nil, 1, fmt.Errorf("unsupported provider '%s'. Supported: anthropic, cursor, gemini, local, openai", rawProvider)
+		return nil, 1, fmt.Errorf("unsupported provider '%s'. Supported: anthropic, bifrost, cursor, gemini, local, openai, copilot, muse", rawProvider)
 	}
 	model := options.model
 	if provider == "anthropic" && model == "" {
@@ -526,6 +529,12 @@ func openOrResumeSession(store *chat.SessionStore, options chatOptionsValue) (*c
 	}
 	if provider == "local" && model == "" {
 		model = chat.LocalDefaultModel
+	}
+	if provider == "bifrost" && model == "" {
+		model = chat.BifrostDefaultModel
+	}
+	if provider == "copilot" && model == "" {
+		model = chat.CopilotDefaultModel
 	}
 	if (provider == "openai" || provider == "gemini") && model == "" {
 		return nil, 1, fmt.Errorf("provider '%s' requires --model (no safe default confirmed from official docs)", provider)

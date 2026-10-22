@@ -28,6 +28,9 @@ const (
 	BifrostBaseURLEnv     = "HARNESS_BIFROST_BASE_URL"
 	DefaultBifrostBaseURL = "http://127.0.0.1:8080/v1"
 	BifrostDefaultModel   = "openai/gpt-4o"
+	CopilotBaseURLEnv     = "HARNESS_COPILOT_BASE_URL"
+	DefaultCopilotBaseURL = "https://api.githubcopilot.com"
+	CopilotDefaultModel   = "gpt-4o"
 )
 
 var providerAliases = map[string]string{
@@ -35,6 +38,8 @@ var providerAliases = map[string]string{
 	"gemini": "gemini", "google": "gemini", "openai": "openai", "gpt": "openai",
 	"local": "local", "ollama": "local", "llamacpp": "local", "llama-server": "local",
 	"bifrost": "bifrost", "maxim": "bifrost",
+	"copilot": "copilot", "github-copilot": "copilot", "codex": "copilot",
+	"muse": "muse",
 }
 
 // HTTPDoer makes provider requests replaceable with deterministic fake transports.
@@ -115,6 +120,9 @@ func resolveModel(provider, model string) (string, error) {
 	}
 	if provider == "bifrost" {
 		return BifrostDefaultModel, nil
+	}
+	if provider == "copilot" {
+		return CopilotDefaultModel, nil
 	}
 	return "", &ProviderError{Provider: provider, Message: provider + " requires --model"}
 }
@@ -239,7 +247,12 @@ func buildRequest(provider, model string, messages []Message, apiKey string, too
 		if definitions := anthropicTools(tools); len(definitions) > 0 {
 			payload["tools"] = definitions
 		}
-		headers["x-api-key"] = apiKey
+		if strings.HasPrefix(apiKey, "sk-ant-oat01-") || strings.HasPrefix(apiKey, "Bearer ") {
+			token := strings.TrimPrefix(apiKey, "Bearer ")
+			headers["authorization"] = "Bearer " + strings.TrimSpace(token)
+		} else {
+			headers["x-api-key"] = apiKey
+		}
 		headers["anthropic-version"] = "2023-06-01"
 		endpoint, err := anthropicMessagesEndpoint()
 		if err != nil {
@@ -297,6 +310,26 @@ func buildRequest(provider, model string, messages []Message, apiKey string, too
 			return "", nil, nil, err
 		}
 		return marshalRequest(endpoint, headers, payload)
+	case "copilot":
+		payload = map[string]any{"model": model, "messages": messagesForOpenAI(messages)}
+		if stream {
+			payload["stream"] = true
+			payload["stream_options"] = map[string]any{"include_usage": true}
+		}
+		if definitions := openAITools(tools); len(definitions) > 0 {
+			payload["tools"] = definitions
+		}
+		token := strings.TrimPrefix(apiKey, "Bearer ")
+		headers["authorization"] = "Bearer " + strings.TrimSpace(token)
+		headers["copilot-integration-id"] = "vscode-chat"
+		headers["editor-version"] = "vscode/1.95.0"
+		headers["editor-plugin-version"] = "copilot-chat/0.22.4"
+		headers["openai-intent"] = "conversation-panel"
+		endpoint, err := copilotChatCompletionsEndpoint()
+		if err != nil {
+			return "", nil, nil, err
+		}
+		return marshalRequest(endpoint, headers, payload)
 	case "gemini":
 		payload = map[string]any{"contents": geminiContents(messages)}
 		if IsGeminiThinkingSupported(model) {
@@ -320,7 +353,12 @@ func buildRequest(provider, model string, messages []Message, apiKey string, too
 		if definitions := geminiTools(tools); len(definitions) > 0 {
 			payload["tools"] = []any{map[string]any{"functionDeclarations": definitions}}
 		}
-		headers["x-goog-api-key"] = apiKey
+		if strings.HasPrefix(apiKey, "ya29.") || strings.HasPrefix(apiKey, "Bearer ") {
+			token := strings.TrimPrefix(apiKey, "Bearer ")
+			headers["authorization"] = "Bearer " + strings.TrimSpace(token)
+		} else {
+			headers["x-goog-api-key"] = apiKey
+		}
 		method := "generateContent"
 		if stream {
 			method = "streamGenerateContent?alt=sse"
@@ -345,6 +383,18 @@ func bifrostChatCompletionsEndpoint() (string, error) {
 	parsed, err := url.Parse(base)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
 		return "", &ProviderError{Provider: "bifrost", Message: "invalid " + BifrostBaseURLEnv + "; expected an HTTP(S) origin (default: " + DefaultBifrostBaseURL + ")"}
+	}
+	return strings.TrimRight(base, "/") + "/chat/completions", nil
+}
+
+func copilotChatCompletionsEndpoint() (string, error) {
+	base := strings.TrimSpace(os.Getenv(CopilotBaseURLEnv))
+	if base == "" {
+		base = DefaultCopilotBaseURL
+	}
+	parsed, err := url.Parse(base)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return "", &ProviderError{Provider: "copilot", Message: "invalid " + CopilotBaseURLEnv + "; expected an HTTP(S) origin"}
 	}
 	return strings.TrimRight(base, "/") + "/chat/completions", nil
 }
@@ -588,7 +638,7 @@ func decodeCompletion(provider string, data map[string]any) (Completion, error) 
 		result.ProviderMessage = map[string]any{"role": "assistant", "content": blocks}
 		usage, _ := data["usage"].(map[string]any)
 		result.InputTokens, result.OutputTokens = tokenCount(usage["input_tokens"]), tokenCount(usage["output_tokens"])
-	case "openai", "local", "bifrost":
+	case "openai", "local", "bifrost", "copilot":
 		choices, _ := data["choices"].([]any)
 		if len(choices) > 0 {
 			choice, _ := choices[0].(map[string]any)
@@ -639,7 +689,7 @@ func decodeCompletion(provider string, data map[string]any) (Completion, error) 
 		usage, _ := data["usageMetadata"].(map[string]any)
 		result.InputTokens, result.OutputTokens = tokenCount(usage["promptTokenCount"]), tokenCount(usage["candidatesTokenCount"])
 	}
-	if provider == "anthropic" || provider == "openai" || provider == "local" || provider == "bifrost" {
+	if provider == "anthropic" || provider == "openai" || provider == "local" || provider == "bifrost" || provider == "copilot" {
 		for _, call := range result.ToolCalls {
 			if strings.TrimSpace(call.ID) == "" {
 				return Completion{}, &ProviderError{Provider: provider, Message: provider + " returned a tool call without a required call ID"}
@@ -788,7 +838,7 @@ func readStream(ctx context.Context, provider string, source io.Reader, apiKey s
 			}
 			return nil
 		}
-		if provider == "openai" || provider == "local" || provider == "bifrost" {
+		if provider == "openai" || provider == "local" || provider == "bifrost" || provider == "copilot" {
 			usage, _ := data["usage"].(map[string]any)
 			if value, exists := usage["prompt_tokens"]; exists {
 				inputTokens = tokenCount(value)

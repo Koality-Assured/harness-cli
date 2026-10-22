@@ -81,6 +81,28 @@ func TestProviderCompleteShapesAndUsage(t *testing.T) {
 				}
 			},
 		},
+		{
+			provider: "copilot", model: "gpt-4o", endpoint: "https://api.githubcopilot.com/chat/completions",
+			body: `{"choices":[{"message":{"role":"assistant","content":"hello from copilot","tool_calls":[{"id":"cp-1","type":"function","function":{"name":"double","arguments":"{\"value\":4}"}}]}}],"usage":{"prompt_tokens":12,"completion_tokens":6}}`,
+			check: func(t *testing.T, request *http.Request, got Completion) {
+				if request.Header.Get("authorization") != "Bearer fake-secret" {
+					t.Fatalf("Copilot auth header = %q", request.Header.Get("authorization"))
+				}
+				if request.Header.Get("copilot-integration-id") != "vscode-chat" {
+					t.Fatalf("Copilot integration ID = %q", request.Header.Get("copilot-integration-id"))
+				}
+				if request.Header.Get("editor-version") != "vscode/1.95.0" {
+					t.Fatalf("Copilot editor version = %q", request.Header.Get("editor-version"))
+				}
+				if request.Header.Get("openai-intent") != "conversation-panel" {
+					t.Fatalf("Copilot openai intent = %q", request.Header.Get("openai-intent"))
+				}
+				payload := readRequestJSON(t, request)
+				if payload["stream"] != nil || got.Text != "hello from copilot" || len(got.ToolCalls) != 1 || got.ToolCalls[0].Name != "double" || *got.InputTokens != 12 || *got.OutputTokens != 6 {
+					t.Fatalf("Copilot payload/completion = %#v / %#v", payload, got)
+				}
+			},
+		},
 	}
 	for _, test := range cases {
 		t.Run(test.provider, func(t *testing.T) {
@@ -298,3 +320,56 @@ func TestProviderErrorsRedactCredentialsAndRequireModels(t *testing.T) {
 		t.Fatalf("Cursor error = %v", err)
 	}
 }
+
+func TestProviderBearerPolymorphism(t *testing.T) {
+	cases := []struct {
+		provider string
+		model    string
+		token    string
+		check    func(*testing.T, *http.Request)
+	}{
+		{
+			provider: "anthropic",
+			model:    "claude-sonnet-4-5",
+			token:    "sk-ant-oat01-setup-token-12345",
+			check: func(t *testing.T, req *http.Request) {
+				if req.Header.Get("Authorization") != "Bearer sk-ant-oat01-setup-token-12345" {
+					t.Fatalf("expected Bearer Authorization header, got %q", req.Header.Get("Authorization"))
+				}
+				if req.Header.Get("x-api-key") != "" {
+					t.Fatalf("expected x-api-key header to be omitted for OAuth Bearer token, got %q", req.Header.Get("x-api-key"))
+				}
+			},
+		},
+		{
+			provider: "gemini",
+			model:    "gemini-2.5-pro",
+			token:    "ya29.oauth-access-token-67890",
+			check: func(t *testing.T, req *http.Request) {
+				if req.Header.Get("Authorization") != "Bearer ya29.oauth-access-token-67890" {
+					t.Fatalf("expected Bearer Authorization header, got %q", req.Header.Get("Authorization"))
+				}
+				if req.Header.Get("x-goog-api-key") != "" {
+					t.Fatalf("expected x-goog-api-key header to be omitted for OAuth Bearer token, got %q", req.Header.Get("x-goog-api-key"))
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.provider+"_bearer", func(t *testing.T) {
+			var captured *http.Request
+			client := &ProviderClient{HTTP: doerFunc(func(req *http.Request) (*http.Response, error) {
+				captured = req
+				return fakeResponse(http.StatusOK, `{"choices":[{"message":{"content":"ok"}}]}`), nil
+			})}
+
+			_, _ = client.Complete(context.Background(), tc.provider, tc.model, []Message{{Role: "user", Content: "hi"}}, tc.token, nil)
+			if captured == nil {
+				t.Fatal("request was not captured")
+			}
+			tc.check(t, captured)
+		})
+	}
+}
+
