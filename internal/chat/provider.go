@@ -356,6 +356,11 @@ func buildRequest(provider, model string, messages []Message, apiKey string, too
 		if strings.HasPrefix(apiKey, "ya29.") || strings.HasPrefix(apiKey, "Bearer ") {
 			token := strings.TrimPrefix(apiKey, "Bearer ")
 			headers["authorization"] = "Bearer " + strings.TrimSpace(token)
+			if quotaProj := os.Getenv("GOOGLE_CLOUD_PROJECT"); quotaProj != "" {
+				headers["x-goog-user-project"] = strings.TrimSpace(quotaProj)
+			} else if coreProj := os.Getenv("CLOUDSDK_CORE_PROJECT"); coreProj != "" {
+				headers["x-goog-user-project"] = strings.TrimSpace(coreProj)
+			}
 		} else {
 			headers["x-goog-api-key"] = apiKey
 		}

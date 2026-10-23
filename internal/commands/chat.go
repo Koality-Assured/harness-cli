@@ -827,6 +827,13 @@ func runInteractiveChat(cmd *cobra.Command, store *chat.SessionStore, session *c
 			}
 			return ""
 		}
+		// In-session token freshness check before each turn
+		if provider == "copilot" || provider == "anthropic" || provider == "gemini" {
+			vault := auth.GetVault()
+			if freshCred, err := auth.EnsureFreshToken(vault, provider, 300*time.Second); err == nil && freshCred != nil && freshCred.AccessToken != "" {
+				apiKey = freshCred.AccessToken
+			}
+		}
 		go func() {
 			text, err := chat.RunTurn(ctx, store, session.ID, line, provider, model, apiKey, client, turnOptions)
 			done <- struct {

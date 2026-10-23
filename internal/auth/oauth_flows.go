@@ -339,6 +339,11 @@ func RefreshToken(vault Vault, provider string) (*Credential, error) {
 		return cred, nil
 	}
 
+	// Protect ambient / env / api-key credentials from simulated rotation
+	if strings.Contains(cred.Profile, "ambient") || strings.Contains(cred.Profile, "env") || strings.Contains(cred.Profile, "api-key") {
+		return cred, nil
+	}
+
 	stateBytes := make([]byte, 16)
 	_, _ = rand.Read(stateBytes)
 	rotState := hex.EncodeToString(stateBytes)
@@ -385,7 +390,7 @@ func EnsureFreshToken(vault Vault, provider string, buffer time.Duration) (*Cred
 
 	bufferSec := int64(buffer.Seconds())
 	if bufferSec <= 0 {
-		bufferSec = 60
+		bufferSec = 300 // Default to 5 minutes
 	}
 	if IsTokenExpired(cred.ExpiresAt, bufferSec) {
 		return RefreshToken(vault, provider)
@@ -603,8 +608,9 @@ func LoginBifrost(apiKey string) error {
 	return nil
 }
 
+var CopilotTokenEndpoint = "https://api.github.com/copilot_internal/v2/token"
+
 const (
-	CopilotTokenEndpoint = "https://api.github.com/copilot_internal/v2/token"
 	CopilotClientID      = "01ab8ac94e5469b812b5"
 	GitHubDeviceCodeURL  = "https://github.com/login/device/code"
 	GitHubAccessTokenURL = "https://github.com/login/oauth/access_token"
@@ -826,6 +832,16 @@ func AutoDiscoverCopilotCredentials() *Credential {
 		}
 	}
 
+	// Safely check GITHUB_TOKEN or GH_TOKEN via token exchange
+	for _, envVar := range []string{"GITHUB_TOKEN", "GH_TOKEN"} {
+		if val := strings.TrimSpace(os.Getenv(envVar)); val != "" {
+			cred, err := ExchangeCopilotToken(val)
+			if err == nil && cred != nil {
+				return cred
+			}
+		}
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
@@ -835,11 +851,20 @@ func AutoDiscoverCopilotCredentials() *Credential {
 	if content, err := os.ReadFile(copilotHosts); err == nil {
 		var hosts map[string]map[string]interface{}
 		if err := json.Unmarshal(content, &hosts); err == nil {
-			for _, info := range hosts {
-				if oauthToken, ok := info["oauth_token"].(string); ok && strings.TrimSpace(oauthToken) != "" {
-					cred, err := ExchangeCopilotToken(oauthToken)
-					if err == nil && cred != nil {
-						return cred
+			// Prioritize github.com if present
+			orderedKeys := []string{"github.com"}
+			for k := range hosts {
+				if k != "github.com" {
+					orderedKeys = append(orderedKeys, k)
+				}
+			}
+			for _, k := range orderedKeys {
+				if info, exists := hosts[k]; exists {
+					if oauthToken, ok := info["oauth_token"].(string); ok && strings.TrimSpace(oauthToken) != "" {
+						cred, err := ExchangeCopilotToken(oauthToken)
+						if err == nil && cred != nil {
+							return cred
+						}
 					}
 				}
 			}
@@ -854,8 +879,8 @@ func AutoDiscoverCopilotCredentials() *Credential {
 			if strings.HasPrefix(line, "oauth_token:") {
 				parts := strings.SplitN(line, ":", 2)
 				if len(parts) == 2 {
-					token := strings.TrimSpace(parts[1])
-					if strings.HasPrefix(token, "gho_") || strings.HasPrefix(token, "ghp_") {
+					token := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+					if strings.HasPrefix(token, "gho_") || strings.HasPrefix(token, "ghp_") || strings.HasPrefix(token, "github_pat_") {
 						cred, err := ExchangeCopilotToken(token)
 						if err == nil && cred != nil {
 							return cred

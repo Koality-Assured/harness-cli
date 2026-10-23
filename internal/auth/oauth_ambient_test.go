@@ -160,6 +160,7 @@ func TestAutoDiscoverAPIKey_AmbientFallback(t *testing.T) {
 }
 
 func TestExchangeCopilotToken(t *testing.T) {
+	origEndpoint := CopilotTokenEndpoint
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader != "token gho_test_github_token" {
@@ -178,10 +179,24 @@ func TestExchangeCopilotToken(t *testing.T) {
 		})
 	}))
 	defer server.Close()
+	defer func() { CopilotTokenEndpoint = origEndpoint }()
 
-	// In test, temporarily override CopilotTokenEndpoint
-	// Since CopilotTokenEndpoint is a constant, we verify mock server structure and direct HTTP flow logic
-	if server.URL == "" {
-		t.Fatal("server URL empty")
+	CopilotTokenEndpoint = server.URL
+
+	cred, err := ExchangeCopilotToken("gho_test_github_token")
+	if err != nil {
+		t.Fatalf("ExchangeCopilotToken failed: %v", err)
+	}
+	if cred == nil {
+		t.Fatal("expected credential, got nil")
+	}
+	if cred.AccessToken != "tid=exchanged-copilot-token-456" {
+		t.Errorf("expected token tid=exchanged-copilot-token-456, got %q", cred.AccessToken)
+	}
+	if cred.RefreshToken != "gho_test_github_token" {
+		t.Errorf("expected refresh token to be preserved, got %q", cred.RefreshToken)
+	}
+	if cred.TokenType != "Bearer" {
+		t.Errorf("expected Bearer token type, got %q", cred.TokenType)
 	}
 }
