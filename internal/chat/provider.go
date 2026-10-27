@@ -129,9 +129,9 @@ func resolveModel(provider, model string) (string, error) {
 
 func (c *ProviderClient) Complete(ctx context.Context, provider, model string, messages []Message, apiKey string, tools []ToolDefinition, opts ...TurnOptions) (Completion, error) {
 	canonical, ok := NormalizeProvider(provider)
-	if !ok || canonical == "cursor" {
-		if canonical == "cursor" {
-			return Completion{}, &ProviderError{Provider: canonical, Message: "provider 'cursor' chat is not wired: no documented public chat endpoint to call"}
+	if !ok || canonical == "cursor" || canonical == "muse" {
+		if canonical == "cursor" || canonical == "muse" {
+			return Completion{}, &ProviderError{Provider: canonical, Message: fmt.Sprintf("provider %q chat is not wired: no documented public chat endpoint to call", canonical)}
 		}
 		return Completion{}, &ProviderError{Provider: provider, Message: fmt.Sprintf("unsupported provider %q", provider)}
 	}
@@ -175,9 +175,9 @@ func (c *ProviderClient) Complete(ctx context.Context, provider, model string, m
 // Stream emits text deltas and returns only after the provider's final stream event is assembled.
 func (c *ProviderClient) Stream(ctx context.Context, provider, model string, messages []Message, apiKey string, tools []ToolDefinition, onDelta func(string), opts ...TurnOptions) (Completion, error) {
 	canonical, ok := NormalizeProvider(provider)
-	if !ok || canonical == "cursor" {
-		if canonical == "cursor" {
-			return Completion{}, &ProviderError{Provider: canonical, Message: "provider 'cursor' chat is not wired: no documented public chat endpoint to call"}
+	if !ok || canonical == "cursor" || canonical == "muse" {
+		if canonical == "cursor" || canonical == "muse" {
+			return Completion{}, &ProviderError{Provider: canonical, Message: fmt.Sprintf("provider %q chat is not wired: no documented public chat endpoint to call", canonical)}
 		}
 		return Completion{}, &ProviderError{Provider: provider, Message: fmt.Sprintf("unsupported provider %q", provider)}
 	}

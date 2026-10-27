@@ -319,6 +319,9 @@ func TestProviderErrorsRedactCredentialsAndRequireModels(t *testing.T) {
 	if _, err := (&ProviderClient{}).Complete(context.Background(), "cursor", "", nil, "", nil); err == nil || !strings.Contains(err.Error(), "not wired") {
 		t.Fatalf("Cursor error = %v", err)
 	}
+	if _, err := (&ProviderClient{}).Complete(context.Background(), "muse", "", nil, "", nil); err == nil || !strings.Contains(err.Error(), "not wired") {
+		t.Fatalf("Muse error = %v", err)
+	}
 }
 
 func TestProviderBearerPolymorphism(t *testing.T) {

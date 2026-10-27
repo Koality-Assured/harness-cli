@@ -205,7 +205,7 @@ func init() {
 	chatCmd.Flags().StringVar(&chatOptions.resume, "resume", "", "Resume session by id")
 	chatCmd.Flags().BoolVar(&chatOptions.continueSession, "continue", false, "Resume latest session")
 	chatCmd.Flags().StringVar(&chatOptions.model, "model", "", "Model id (required for openai/gemini)")
-	chatCmd.Flags().StringVar(&chatOptions.provider, "provider", "", "Model provider (default: anthropic)")
+	chatCmd.Flags().StringVar(&chatOptions.provider, "provider", "", "Model provider (anthropic, bifrost, copilot, gemini, local, openai; default: anthropic)")
 	chatCmd.Flags().StringVar(&chatOptions.title, "title", "", "Session title")
 	chatCmd.Flags().BoolVar(&chatOptions.noStream, "no-stream", false, "Wait for the complete response and print it once")
 	chatCmd.Flags().StringVar(&chatOptions.preset, "preset", "", "Pre-canned system prompt persona")
