@@ -52,6 +52,10 @@ var authLoginCmd = &cobra.Command{
 			return nil
 		case "bifrost":
 			return auth.LoginBifrost(authAPIKey)
+		case "copilot":
+			return auth.LoginCopilot(authAPIKey)
+		case "muse":
+			return auth.LoginMuse(authAPIKey)
 		default:
 			return fmt.Errorf("provider '%s' handler not implemented", prov)
 		}

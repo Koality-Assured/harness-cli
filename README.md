@@ -173,7 +173,7 @@ The table below summarizes the full command matrix supported by `harness`:
 | `harness commands` | Slash Commands | `--json` | Lists interactive slash commands supported in `harness chat`. |
 | `harness gateway` | Completion Gateway | `--host`, `--port`, `--provider`, `--model` | Serves loopback OpenAI-compatible chat completions proxy subset (`:8642`). |
 | `harness acp` | ACP v1 JSON-RPC | `--provider`, `--model` | Runs ACP v1 (Agent Communication Protocol) stdio JSON-RPC adapter. |
-| `harness auth login` | Credential Vault Login | `[provider]` (`anthropic`, `cursor`, `gemini`, `openai`) | Authenticates and securely persists provider API keys into OS vault. |
+| `harness auth login` | Credential Vault Login | `[provider]` (`anthropic`, `bifrost`, `copilot`, `gemini`, `local`, `muse`, `openai`) | Authenticates and securely persists provider API keys into OS vault. |
 | `harness auth status` | Credential Audit | `--json` | Audits stored credentials, token expiration, and active vault backend. |
 | `harness auth logout` | Purge Credentials | `[provider]` | Safely purges credentials from the OS keyring and fallback vault. |
 | `harness spoke sync` | Spoke Synchronization | `--all`, `--ref`, `--no-fetch`, `--dry-run` | Pulls allowlisted upstream updates from `ai-harness-core` into domain spokes. |
@@ -233,6 +233,31 @@ Switch between multiple domain harnesses with an interactive terminal switcher:
 harness tui
 # Use arrow keys or j/k to navigate, Enter to activate, q to quit
 ```
+
+### 5. Multi-Provider Inference & Ambient Credential Discovery
+`harness` supports direct API keys, local LLM runtimes, enterprise inference gateways, and ambient OAuth subscription sessions across major AI ecosystems:
+
+| Provider | Aliases | Default Model | Authentication & Header Strategy |
+| :--- | :--- | :--- | :--- |
+| **Anthropic** | `claude` | `claude-sonnet-4-5` | `x-api-key: <key>` or `Authorization: Bearer <token>` for OAuth session tokens (`sk-ant-oat01-`). |
+| **OpenAI** | `gpt` | Explicit `--model` | `Authorization: Bearer <key>`. Supports reasoning effort for `o1`/`o3` models. |
+| **Google Gemini** | `google` | Explicit `--model` | `x-goog-api-key: <key>` for AI Studio keys; `Authorization: Bearer <token>` + `x-goog-user-project` for ADC tokens. |
+| **Local Runtime** | `ollama`, `llamacpp` | `qwen2.5-coder:14b` | Connects to `http://127.0.0.1:11434/v1` without requiring vault keys. |
+| **Maxim Bifrost** | `maxim` | `openai/gpt-4o` | High-throughput gateway at `http://127.0.0.1:8080/v1`. Client authentication is optional. |
+| **GitHub Copilot** | `github-copilot`, `codex` | `gpt-4o` | Exchanges GitHub PAT/OAuth tokens for transient session tokens with VSCode integration headers. |
+| **Meta Muse** | `muse` | Custom `--model` | Discovers ambient credentials from `~/.muse/` or `META_API_KEY`/`MUSE_API_KEY`. |
+
+#### Ambient Discovery Cascade
+Before prompting the user for credentials, `harness` automatically traverses a 5-tier discovery cascade:
+1. **CLI Flag**: Explicit `--api-key` argument.
+2. **Environment Variables**: Provider-specific env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `COPILOT_TOKEN`, etc.).
+3. **Project & User `.env`**: Local or user-level environment files.
+4. **Ambient Session Stores**:
+   - Anthropic: `~/.claude.json`, `~/.claude/.credentials.json`, `~/.config/claude/credentials.json`
+   - Gemini: `~/.gemini/tokens.json`, `~/.config/gcloud/application_default_credentials.json`
+   - Copilot: `~/.config/github-copilot/hosts.json`, `~/.config/gh/hosts.yml`
+   - Muse: `~/.muse/credentials.json`, `~/.muse/config.json`
+5. **Interactive Masked Prompt**: Terminal prompt if running interactively.
 
 ---
 

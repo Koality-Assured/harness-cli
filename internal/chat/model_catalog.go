@@ -86,7 +86,7 @@ func GetContextWindow(model, provider string) int {
 	if strings.HasPrefix(mod, "o1") || strings.HasPrefix(mod, "o3") {
 		return 200000
 	}
-	if strings.HasPrefix(mod, "gpt-4o") || strings.HasPrefix(mod, "gpt-4-turbo") || prov == "openai" {
+	if strings.HasPrefix(mod, "gpt-4o") || strings.HasPrefix(mod, "gpt-4-turbo") || prov == "openai" || prov == "copilot" {
 		if mod == "gpt-4" {
 			return 8192
 		}
@@ -102,8 +102,9 @@ func resolveModelMetadata(provider, model string) ModelMetadata {
 	prov := normalizeCatalogProvider(provider)
 	mod := strings.ToLower(strings.TrimSpace(model))
 
-	if prov == "local" {
-		return modelPricingCatalog["local-default"]
+	if prov == "local" || prov == "copilot" {
+		ctx := GetContextWindow(model, provider)
+		return ModelMetadata{ContextWindow: ctx, InputCostPerM: 0.0, OutputCostPerM: 0.0}
 	}
 	if meta, ok := modelPricingCatalog[mod]; ok {
 		return meta
@@ -154,7 +155,7 @@ func resolveModelMetadata(provider, model string) ModelMetadata {
 // CalculateTokenCost calculates the token cost in USD. Local provider models are always $0.00.
 func CalculateTokenCost(provider, model string, inputTokens, outputTokens int) float64 {
 	prov := normalizeCatalogProvider(provider)
-	if prov == "local" {
+	if prov == "local" || prov == "copilot" {
 		return 0.0
 	}
 	if inputTokens <= 0 && outputTokens <= 0 {
