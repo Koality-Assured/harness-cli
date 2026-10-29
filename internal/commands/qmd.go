@@ -314,7 +314,7 @@ func init() {
 	qmdSearchCmd.Flags().IntVarP(&qmdLimit, "limit", "n", 5, "Maximum number of results to return")
 
 	qmdVSearchCmd.Flags().StringVarP(&qmdCollection, "collection", "c", "", "Filter search to specific collection")
-	qmdVSearchCmd.Flags().Float64Var(&qmdMinScore, "min-score", 0.4, "Minimum vector similarity score floor")
+	qmdVSearchCmd.Flags().Float64Var(&qmdMinScore, "min-score", 0.35, "Minimum vector similarity score floor")
 	qmdVSearchCmd.Flags().IntVarP(&qmdLimit, "limit", "n", 5, "Maximum number of results to return")
 
 	qmdQueryCmd.Flags().StringVarP(&qmdCollection, "collection", "c", "", "Filter search to specific collection")
