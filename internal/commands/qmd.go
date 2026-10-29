@@ -15,22 +15,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	qmdCollection string
-	qmdMinScore   float64
-	qmdLimit      int
-	qmdIntent     string
-	qmdLex        string
-	qmdVec        string
-	qmdHyde       string
-	qmdNoRerank   bool
-	qmdMaxLines   int
-	qmdMaxBytes   int
-	qmdFormat     string
-	qmdForce      bool
-	qmdTimeout    int
-)
-
 var qmdCmd = &cobra.Command{
 	Use:   "qmd",
 	Short: "Query, search, and maintain repository Markdown knowledge bases via QMD",
@@ -50,18 +34,22 @@ var qmdSearchCmd = &cobra.Command{
 			return err
 		}
 
+		minScore, _ := cmd.Flags().GetFloat64("min-score")
+		limit, _ := cmd.Flags().GetInt("limit")
+		collection, _ := cmd.Flags().GetString("collection")
+
 		qmdArgs := []string{"search"}
 		if JSONOutput {
 			qmdArgs = append(qmdArgs, "--format", "json")
 		}
-		if qmdMinScore > 0 {
-			qmdArgs = append(qmdArgs, "--min-score", fmt.Sprintf("%g", qmdMinScore))
+		if minScore > 0 {
+			qmdArgs = append(qmdArgs, "--min-score", fmt.Sprintf("%g", minScore))
 		}
-		if qmdLimit > 0 {
-			qmdArgs = append(qmdArgs, "-n", strconv.Itoa(qmdLimit))
+		if limit > 0 {
+			qmdArgs = append(qmdArgs, "-n", strconv.Itoa(limit))
 		}
-		if qmdCollection != "" {
-			qmdArgs = append(qmdArgs, "-c", qmdCollection)
+		if collection != "" {
+			qmdArgs = append(qmdArgs, "-c", collection)
 		}
 		qmdArgs = append(qmdArgs, query)
 
@@ -85,18 +73,22 @@ var qmdVSearchCmd = &cobra.Command{
 			return err
 		}
 
+		minScore, _ := cmd.Flags().GetFloat64("min-score")
+		limit, _ := cmd.Flags().GetInt("limit")
+		collection, _ := cmd.Flags().GetString("collection")
+
 		qmdArgs := []string{"vsearch"}
 		if JSONOutput {
 			qmdArgs = append(qmdArgs, "--format", "json")
 		}
-		if qmdMinScore > 0 {
-			qmdArgs = append(qmdArgs, "--min-score", fmt.Sprintf("%g", qmdMinScore))
+		if minScore > 0 {
+			qmdArgs = append(qmdArgs, "--min-score", fmt.Sprintf("%g", minScore))
 		}
-		if qmdLimit > 0 {
-			qmdArgs = append(qmdArgs, "-n", strconv.Itoa(qmdLimit))
+		if limit > 0 {
+			qmdArgs = append(qmdArgs, "-n", strconv.Itoa(limit))
 		}
-		if qmdCollection != "" {
-			qmdArgs = append(qmdArgs, "-c", qmdCollection)
+		if collection != "" {
+			qmdArgs = append(qmdArgs, "-c", collection)
 		}
 		qmdArgs = append(qmdArgs, query)
 
@@ -119,37 +111,46 @@ var qmdQueryCmd = &cobra.Command{
 			return err
 		}
 
+		minScore, _ := cmd.Flags().GetFloat64("min-score")
+		limit, _ := cmd.Flags().GetInt("limit")
+		collection, _ := cmd.Flags().GetString("collection")
+		noRerank, _ := cmd.Flags().GetBool("no-rerank")
+		intent, _ := cmd.Flags().GetString("intent")
+		lex, _ := cmd.Flags().GetString("lex")
+		vec, _ := cmd.Flags().GetString("vec")
+		hyde, _ := cmd.Flags().GetString("hyde")
+
 		qmdArgs := []string{"query"}
 		if JSONOutput {
 			qmdArgs = append(qmdArgs, "--format", "json")
 		}
-		if qmdMinScore > 0 {
-			qmdArgs = append(qmdArgs, "--min-score", fmt.Sprintf("%g", qmdMinScore))
+		if minScore > 0 {
+			qmdArgs = append(qmdArgs, "--min-score", fmt.Sprintf("%g", minScore))
 		}
-		if qmdLimit > 0 {
-			qmdArgs = append(qmdArgs, "-n", strconv.Itoa(qmdLimit))
+		if limit > 0 {
+			qmdArgs = append(qmdArgs, "-n", strconv.Itoa(limit))
 		}
-		if qmdNoRerank {
+		if noRerank {
 			qmdArgs = append(qmdArgs, "--no-rerank")
 		}
-		if qmdCollection != "" {
-			qmdArgs = append(qmdArgs, "-c", qmdCollection)
+		if collection != "" {
+			qmdArgs = append(qmdArgs, "-c", collection)
 		}
 
 		// Structured document if intent/lex/vec/hyde specified
-		if qmdIntent != "" || qmdLex != "" || qmdVec != "" || qmdHyde != "" {
+		if intent != "" || lex != "" || vec != "" || hyde != "" {
 			var lines []string
-			if qmdIntent != "" {
-				lines = append(lines, fmt.Sprintf("intent: %s", qmdIntent))
+			if intent != "" {
+				lines = append(lines, fmt.Sprintf("intent: %s", intent))
 			}
-			if qmdLex != "" {
-				lines = append(lines, fmt.Sprintf("lex: %s", qmdLex))
+			if lex != "" {
+				lines = append(lines, fmt.Sprintf("lex: %s", lex))
 			}
-			if qmdVec != "" {
-				lines = append(lines, fmt.Sprintf("vec: %s", qmdVec))
+			if vec != "" {
+				lines = append(lines, fmt.Sprintf("vec: %s", vec))
 			}
-			if qmdHyde != "" {
-				lines = append(lines, fmt.Sprintf("hyde: %s", qmdHyde))
+			if hyde != "" {
+				lines = append(lines, fmt.Sprintf("hyde: %s", hyde))
 			}
 			qmdArgs = append(qmdArgs, strings.Join(lines, "\n"))
 		} else if len(args) > 0 {
@@ -199,17 +200,21 @@ var qmdMultiGetCmd = &cobra.Command{
 			return err
 		}
 
+		maxLines, _ := cmd.Flags().GetInt("max-lines")
+		maxBytes, _ := cmd.Flags().GetInt("max-bytes")
+		format, _ := cmd.Flags().GetString("format")
+
 		qmdArgs := []string{"multi-get", targets}
 		if JSONOutput {
 			qmdArgs = append(qmdArgs, "--format", "json")
-		} else if qmdFormat != "" {
-			qmdArgs = append(qmdArgs, "--format", qmdFormat)
+		} else if format != "" {
+			qmdArgs = append(qmdArgs, "--format", format)
 		}
-		if qmdMaxLines > 0 {
-			qmdArgs = append(qmdArgs, "-l", strconv.Itoa(qmdMaxLines))
+		if maxLines > 0 {
+			qmdArgs = append(qmdArgs, "-l", strconv.Itoa(maxLines))
 		}
-		if qmdMaxBytes > 0 {
-			qmdArgs = append(qmdArgs, "--max-bytes", strconv.Itoa(qmdMaxBytes))
+		if maxBytes > 0 {
+			qmdArgs = append(qmdArgs, "--max-bytes", strconv.Itoa(maxBytes))
 		}
 
 		out, err := runQMD(dir, qmdArgs...)
@@ -247,15 +252,19 @@ var qmdEmbedCmd = &cobra.Command{
 			return err
 		}
 
+		collection, _ := cmd.Flags().GetString("collection")
+		force, _ := cmd.Flags().GetBool("force")
+		timeout, _ := cmd.Flags().GetInt("timeout")
+
 		qmdArgs := []string{"embed"}
-		if qmdCollection != "" {
-			qmdArgs = append(qmdArgs, "-c", qmdCollection)
+		if collection != "" {
+			qmdArgs = append(qmdArgs, "-c", collection)
 		}
-		if qmdForce {
+		if force {
 			qmdArgs = append(qmdArgs, "-f")
 		}
-		if qmdTimeout > 0 {
-			qmdArgs = append(qmdArgs, "--timeout", strconv.Itoa(qmdTimeout))
+		if timeout > 0 {
+			qmdArgs = append(qmdArgs, "--timeout", strconv.Itoa(timeout))
 		}
 
 		out, err := runQMD(dir, qmdArgs...)
@@ -308,31 +317,31 @@ var qmdStatusCmd = &cobra.Command{
 }
 
 func init() {
-	// Flags for search / vsearch / query
-	qmdSearchCmd.Flags().StringVarP(&qmdCollection, "collection", "c", "", "Filter search to specific collection")
-	qmdSearchCmd.Flags().Float64Var(&qmdMinScore, "min-score", 0.5, "Minimum similarity score floor")
-	qmdSearchCmd.Flags().IntVarP(&qmdLimit, "limit", "n", 5, "Maximum number of results to return")
+	// Individual flags per subcommand (avoids cross-command global flag collision)
+	qmdSearchCmd.Flags().StringP("collection", "c", "", "Filter search to specific collection")
+	qmdSearchCmd.Flags().Float64("min-score", 0.5, "Minimum similarity score floor")
+	qmdSearchCmd.Flags().IntP("limit", "n", 5, "Maximum number of results to return")
 
-	qmdVSearchCmd.Flags().StringVarP(&qmdCollection, "collection", "c", "", "Filter search to specific collection")
-	qmdVSearchCmd.Flags().Float64Var(&qmdMinScore, "min-score", 0.35, "Minimum vector similarity score floor")
-	qmdVSearchCmd.Flags().IntVarP(&qmdLimit, "limit", "n", 5, "Maximum number of results to return")
+	qmdVSearchCmd.Flags().StringP("collection", "c", "", "Filter search to specific collection")
+	qmdVSearchCmd.Flags().Float64("min-score", 0.35, "Minimum vector similarity score floor")
+	qmdVSearchCmd.Flags().IntP("limit", "n", 5, "Maximum number of results to return")
 
-	qmdQueryCmd.Flags().StringVarP(&qmdCollection, "collection", "c", "", "Filter search to specific collection")
-	qmdQueryCmd.Flags().Float64Var(&qmdMinScore, "min-score", 0.5, "Minimum similarity score floor")
-	qmdQueryCmd.Flags().IntVarP(&qmdLimit, "limit", "n", 5, "Maximum number of results to return")
-	qmdQueryCmd.Flags().StringVar(&qmdIntent, "intent", "", "Structured intent: what to retrieve and what to reject")
-	qmdQueryCmd.Flags().StringVar(&qmdLex, "lex", "", "Structured lex: exact keywords, symbols, titles")
-	qmdQueryCmd.Flags().StringVar(&qmdVec, "vec", "", "Structured vec: natural language paraphrasing")
-	qmdQueryCmd.Flags().StringVar(&qmdHyde, "hyde", "", "Structured hyde: hypothetical answer passage")
-	qmdQueryCmd.Flags().BoolVar(&qmdNoRerank, "no-rerank", false, "Skip LLM reranking (fast RRF mode)")
+	qmdQueryCmd.Flags().StringP("collection", "c", "", "Filter search to specific collection")
+	qmdQueryCmd.Flags().Float64("min-score", 0.5, "Minimum similarity score floor")
+	qmdQueryCmd.Flags().IntP("limit", "n", 5, "Maximum number of results to return")
+	qmdQueryCmd.Flags().String("intent", "", "Structured intent: what to retrieve and what to reject")
+	qmdQueryCmd.Flags().String("lex", "", "Structured lex: exact keywords, symbols, titles")
+	qmdQueryCmd.Flags().String("vec", "", "Structured vec: natural language paraphrasing")
+	qmdQueryCmd.Flags().String("hyde", "", "Structured hyde: hypothetical answer passage")
+	qmdQueryCmd.Flags().Bool("no-rerank", false, "Skip LLM reranking (fast RRF mode)")
 
-	qmdMultiGetCmd.Flags().IntVarP(&qmdMaxLines, "max-lines", "l", 0, "Maximum lines per retrieved file")
-	qmdMultiGetCmd.Flags().IntVar(&qmdMaxBytes, "max-bytes", 65536, "Skip files larger than N bytes")
-	qmdMultiGetCmd.Flags().StringVar(&qmdFormat, "format", "md", "Output format (md, json, cli)")
+	qmdMultiGetCmd.Flags().IntP("max-lines", "l", 0, "Maximum lines per retrieved file")
+	qmdMultiGetCmd.Flags().Int("max-bytes", 65536, "Skip files larger than N bytes")
+	qmdMultiGetCmd.Flags().String("format", "md", "Output format (md, json, cli)")
 
-	qmdEmbedCmd.Flags().StringVarP(&qmdCollection, "collection", "c", "", "Filter embedding to specific collection")
-	qmdEmbedCmd.Flags().BoolVarP(&qmdForce, "force", "f", false, "Force re-embedding of existing documents")
-	qmdEmbedCmd.Flags().IntVar(&qmdTimeout, "timeout", 10, "Embedding session timeout in minutes")
+	qmdEmbedCmd.Flags().StringP("collection", "c", "", "Filter embedding to specific collection")
+	qmdEmbedCmd.Flags().BoolP("force", "f", false, "Force re-embedding of existing documents")
+	qmdEmbedCmd.Flags().Int("timeout", 10, "Embedding session timeout in minutes")
 
 	qmdCmd.AddCommand(qmdSearchCmd)
 	qmdCmd.AddCommand(qmdVSearchCmd)
