@@ -69,6 +69,7 @@ Simply type harness help [path to command] for full details.`,
 	RootCmd.AddCommand(execCmd)
 	RootCmd.AddCommand(localCmd)
 	RootCmd.AddCommand(deferralCmd)
+	RootCmd.AddCommand(qmdCmd)
 	registerConversationCommands()
 }
 
